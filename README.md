@@ -2,15 +2,17 @@
 
 # 断箭战报
 
-AstrBot 原生《断箭》（Broken Arrow）战绩查询插件。支持玩家概览、近期战绩、单局战报图片生成与默认账号绑定，不依赖大模型。
+AstrBot 原生《断箭》（Broken Arrow）战绩查询插件。以简洁排版展示玩家概览、近期战绩与单局核心数据，支持图片战报和默认账号绑定，不依赖大模型。
 
-> 首次使用需配置获准的 BATrace 客户端标识，并开启在线查询。
+近期战绩提供彩色评分；单局战报包含赛前预测、双方对比、兵种构成和玩家数据。
+
+> 数据来源 [BATrace](https://dash.batrace.top/)，如有帮助请支持该平台。更新内容见 [更新日志](CHANGELOG.md)。
 
 ## 快速开始
 
-1. **安装插件**：在 AstrBot 插件管理中导入 `astrbot_plugin_ba_stats_v0.1.1.zip`（或将插件目录放入 `data/plugins/` 并使用 AstrBot 的 Python 环境安装 `requirements.txt`）。
-2. **配置接入**：打开插件设置中的「数据源接入」，填入获准客户端标识（若运营方要求则填写 Bearer 令牌），开启「启用在线查询」。
-3. **保存重载**：保存配置并重载插件使其生效。
+1. **安装插件**：在 AstrBot 插件管理中导入 `astrbot_plugin_ba_stats_v0.1.2.zip`（或将插件目录放入 `data/plugins/` 并使用 AstrBot 的 Python 环境安装 `requirements.txt`）。
+2. **开启查询**：进入插件详情 → 可视化视图 → 设置中心，在「常用设置」中开启「启用在线查询」（默认关闭）；API 地址通常保持默认即可。常用设置也可在 AstrBot 原生插件配置中调整。
+3. **保存重载**：保存设置后，在 AstrBot 插件页手动重载，使在线查询设置生效。
 4. **绑定与查询**：
    - 发送 `ba search 昵称` 搜索玩家
    - 发送 `ba bind stb:玩家ID` 并按提示发送 `ba select 请求码 序号` 确认绑定
@@ -63,13 +65,16 @@ ba stats @群友
 
 ## 主要配置
 
-可在 AstrBot 插件管理页直接调整，修改后需重载插件：
+设置中心和 AstrBot 原生插件配置共用同一份设置。诊断开关保存后即时生效；其他设置保存后，请在插件页手动重载。
 
-- **数据源接入**：在线查询开关、获准客户端标识、访问令牌（可选）、API 地址。
+- **数据源接入**：在线查询开关、API 地址，无需填写客户端标识或令牌。
 - **查询与命令**：默认/最大近期场数（5 / 20）、用户冷却（3 秒）、中文子命令别名开关。
 - **每日请求额度**：每用户默认 20 次、每群默认 100 次（可在 `0–100` 间调整，`0` 表示不单独限制）；**全插件每日总上限固定为 100 次不可调整**。所有额度于北京时间每天 0 点重置，按上游 HTTP 请求计数，失败与重试也计入；命中缓存及本地命令不扣额。
 - **战报显示**：图片战报开关（渲染或发送未成功时回复同内容文字）、深浅主题（默认深色）、显示时区（默认 `Asia/Shanghai`）。
-- **维护与缓存**：请求间隔、并发、超时、重试及缓存容量/旧缓存回退时间。
+- **维护与缓存**：请求间隔、并发、超时、重试及缓存容量/旧缓存回退时间，设置中心中默认折叠。
+- **诊断日志**：诊断开关、日志状态和 ZIP 下载集中显示，内容默认折叠；总容量上限 30 MB，旧日志自动轮换。
+
+排查问题时，在设置中心选择「诊断日志」并展开，开启诊断并保存后复现问题，再点击「下载诊断日志（ZIP）」。下载由宿主登录鉴权。
 
 ## 数据与常见问题
 
@@ -81,8 +86,8 @@ ba stats @群友
 ## 开发与许可
 
 - 运行要求：AstrBot **4.29.4 及以上**，QQ（OneBot v11）；详细测试与验证记录见 [验证记录](docs/VALIDATION.md)。
-- 开源协议：**Apache-2.0**。
-- 致谢与参考：[BATrace](https://dash.batrace.top/)（战绩数据源）、[AlexanderHYuba-dragon](https://github.com/AlexanderHYu/ba-dragon)、[benx1n/wows-stats-bot](https://github.com/benx1n/wows-stats-bot)、[timeance/astrbot_plugin_openai_native](https://github.com/timeance/astrbot_plugin_openai_native)、AstrBot（第三方边界说明见 [第三方说明](docs/THIRD_PARTY.md)）。
+- 开源协议：项目采用 **Apache-2.0**；`scoring.py` 的 ba-dragon 移植部分及 `assets/scoring-model.json` 保留上游 **MIT** 许可，完整文本见 [ba-dragon 许可](docs/BA_DRAGON_LICENSE.txt)。
+- 致谢与参考：[BATrace](https://dash.batrace.top/)（战绩数据源）、[AlexanderHYu/ba-dragon](https://github.com/AlexanderHYu/ba-dragon)（逐局评分模型及接口参考）、[benx1n/wows-stats-bot](https://github.com/benx1n/wows-stats-bot)、[timeance/astrbot_plugin_openai_native](https://github.com/timeance/astrbot_plugin_openai_native)、AstrBot（详见 [第三方说明](docs/THIRD_PARTY.md)）。
 
 ```sh
 python -m pip install -r requirements-dev.txt

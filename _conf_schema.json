@@ -7,28 +7,14 @@
         "description": "启用在线查询",
         "type": "bool",
         "default": false,
-        "hint": "请先取得 BATrace 对本插件的独立接入许可，填写获准客户端标识后再开启。",
+        "hint": "数据来源 BATrace ，如有帮助请支持该平台",
         "obvious_hint": true
-      },
-      "client_id": {
-        "description": "获准客户端标识",
-        "type": "string",
-        "default": "",
-        "hint": "由 BATrace 运营方为本插件单独分配，请勿借用其他项目的标识。",
-        "secret": true
-      },
-      "api_token": {
-        "description": "访问令牌（如需要）",
-        "type": "string",
-        "default": "",
-        "hint": "仅在运营方要求 Bearer 令牌时填写。",
-        "secret": true
       },
       "base_url": {
         "description": "API 地址",
         "type": "string",
         "default": "https://bot.batrace.top",
-        "hint": "以运营方确认的 HTTPS 地址为准。"
+        "hint": "通常保持默认；更换时请填写不含路径、参数和账号信息的 HTTPS 地址。"
       }
     }
   },
@@ -113,6 +99,25 @@
       }
     }
   },
+  "diagnostics": {
+    "type": "object",
+    "description": "诊断日志",
+    "items": {
+      "show_options": {
+        "description": "显示诊断选项",
+        "type": "bool",
+        "default": false,
+        "hint": "完整设置与日志下载：插件详情 → 可视化视图 → 设置中心 → 诊断日志。"
+      },
+      "enabled": {
+        "description": "启用诊断模式",
+        "type": "bool",
+        "default": false,
+        "condition": {"show_options": true},
+        "hint": "启用后持续记录受控诊断信息，日志总量最多 30 MB，满后淘汰旧日志。关闭后停止记录，已有日志仍可下载。"
+      }
+    }
+  },
   "maintenance": {
     "type": "object",
     "description": "维护与请求限制",
@@ -121,7 +126,7 @@
         "description": "上游请求最小间隔（秒）",
         "type": "float",
         "default": 1.0,
-        "hint": "根据获准接入频率调整，对所有在线查询全局生效。"
+        "hint": "对所有在线查询全局生效，避免频繁请求。"
       },
       "concurrency": {
         "description": "上游并发上限",

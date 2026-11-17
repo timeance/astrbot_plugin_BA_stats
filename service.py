@@ -12,6 +12,7 @@ from .client import participant_for
 from .commands import Request, Target
 from .models import FetchResult, Match, Participant, Player
 from .pending import PendingManager
+from .scoring import match_prediction, recent_score, score_band, team_composition
 from .storage import Binding
 
 
@@ -54,46 +55,163 @@ def participant_view(p: Participant):
     return dict(id=p.player_id, name=p.name, elo=p.elo, elo_delta=p.elo_delta,
                 kills=p.kills, losses=p.losses, destroyed_value=p.destroyed_value,
                 lost_value=p.lost_value, unit_exchange=ratio(p.kills, p.losses),
-                value_exchange=ratio(p.destroyed_value, p.lost_value))
+                value_exchange=ratio(p.destroyed_value, p.lost_value),
+                damage_dealt=p.damage_dealt, damage_received=p.damage_received,
+                objectives=p.objectives, spawned_value=p.spawned_value, supply=p.supply,
+                outcome=p.outcome, outcome_source=None)
 
 
-def recent_rows(matches, player_id):
+def analysis_outcomes(player):
+    """Only explicit booleans for this player's exact match IDs can supply results."""
+    outcomes = {}
+    for point in player.analysis.get("trend", {}).get("points", []):
+        mid = point.get("matchId")
+        if mid is not None:
+            known = outcomes.setdefault(mid, set())
+            if isinstance(point.get("won"), bool):
+                known.add(point["won"])
+    return {mid: ("win" if True in known else "loss") if len(known) == 1 else "unknown"
+            for mid, known in outcomes.items()}
+
+
+def map_name(match, player=None):
+    if player is not None and match.map_id is not None:
+        for row in player.analysis.get("mapPerformance", []):
+            if row["mapId"] == match.map_id and row["mapName"]:
+                return row["mapName"]
+    return match.map_name
+
+
+def recent_rows(matches, player_id, player=None):
     rows = []
+    outcomes = analysis_outcomes(player) if player is not None and player.id == player_id else {}
     for match in matches:
         person = participant_for(match, player_id)
         if person is None:
             continue
         row = participant_view(person)
-        row.update(id=match.id, started_at=match.started_at, map_name=match.map_name,
-                   mode=match.mode, outcome=person.outcome,
+        score = recent_score(match, person, player.analysis if player is not None and player.id == player_id else None)
+        outcome = outcomes.get(match.id, person.outcome)
+        row.update(id=match.id, started_at=match.started_at, ended_at=match.ended_at,
+                   map_name=map_name(match, player),
+                   mode=match.mode, outcome=outcome,
+                   outcome_source="analysis" if outcomes.get(match.id) in {"win", "loss"} else None,
+                   score=score, score_band=score_band(score),
                    duration_seconds=match.duration_seconds, source_url=match.source_url)
         rows.append(row)
     return rows
 
 
+def team_metrics(players):
+    metrics = []
+    for field, label, style in (
+        ("destroyed_value", "摧毁分", "decimal"), ("lost_value", "损失分", "decimal"),
+        ("elo", "平均 ELO", "decimal"), ("kills", "击杀", "integer"),
+        ("losses", "阵亡", "integer"), ("damage_dealt", "伤害", "decimal"),
+        ("spawned_value", "出兵花费", "decimal"), ("objectives", "占点", "integer"),
+        ("supply", "补给", "decimal"),
+    ):
+        values = [p[field] for p in players if p[field] is not None]
+        if not values:
+            continue
+        value = sum(values) / len(values) if field == "elo" else sum(values)
+        metric = {"label": label, "value": value, "format": style}
+        if len(values) != len(players):
+            metric["note"] = f"{len(values)}/{len(players)} 人有数据"
+        metrics.append(metric)
+    return metrics
+
+
 def match_view(result, player=None):
     match = result.data
-    if player is not None:
-        participant_for(match, player.id)
+    target = participant_for(match, player.id) if player is not None else None
+    target_outcome = analysis_outcomes(player).get(match.id, "unknown") if target is not None else "unknown"
     teams = OrderedDict()
     for person in match.players:
-        key = person.team if person.team is not None else "未知"
+        key = person.team
         if key not in teams:
-            teams[key] = {"name": f"分队 {key}", "outcome": "unknown", "players": []}
-        teams[key]["players"].append(participant_view(person))
+            teams[key] = {"name": {"0": "A 队", "1": "B 队"}.get(key, f"分队 {key if key is not None else '未知'}"),
+                          "outcome": "unknown", "players": []}
+        row = participant_view(person)
+        if player is not None and person.player_id == player.id:
+            row.update(outcome=target_outcome,
+                       outcome_source="analysis" if target_outcome != "unknown" else None)
+        teams[key]["players"].append(row)
         if match.winner_team is not None and person.team is not None:
             teams[key]["outcome"] = "win" if person.team == match.winner_team else "loss"
+    # Stable A/B ordering is independent of the source participant-map order.
+    teams = OrderedDict(sorted(teams.items(), key=lambda pair: {"0": 0, "1": 1}.get(pair[0], 2)))
+    for key, team in teams.items():
+        team["metrics"] = team_metrics(team["players"])
+        composition = team_composition(match, key)
+        team["composition"] = composition["categories"]
+        team["composition_coverage"] = composition["coverage"]
+        notes = []
+        if composition["unknown_count"]:
+            notes.append(f"{composition['unknown_count']} 次出场单位无法定价，构成暂无")
+        if composition["missing_participants"]:
+            notes.append(f"{composition['missing_participants']} 人缺单位数据，构成暂无")
+        team["composition_note"] = "；".join(notes)
     view = {"kind": "match", "match": {
-        "id": match.id, "map_name": match.map_name, "mode": match.mode,
-        "started_at": match.started_at, "duration_seconds": match.duration_seconds,
-        "winner": f"分队 {match.winner_team}" if match.winner_team is not None else None,
-    }, "teams": list(teams.values()), "scope": f"单局 · 实际收录 {len(match.players)} 名玩家",
+        "id": match.id, "map_name": map_name(match, player), "mode": match.mode,
+        "started_at": match.started_at, "ended_at": match.ended_at, "duration_seconds": match.duration_seconds,
+        "winner": {"0": "A 队", "1": "B 队"}.get(match.winner_team, f"分队 {match.winner_team}")
+                  if match.winner_team is not None else None,
+        "target_outcome": target_outcome,
+        "target_outcome_source": "analysis" if target_outcome != "unknown" else None,
+    }, "teams": list(teams.values()), "prediction": match_prediction(match),
+        "scope": f"单局 · 实际收录 {len(match.players)} 名玩家",
         "source_url": match.source_url, **freshness(result)}
     if player:
         view["player"] = asdict(player)
     if not match.complete:
         view["notes"] = ["本局数据可能尚未完整。"]
     return view
+
+
+def common_units(player, matches):
+    if player.analysis:
+        units = [{"id": u["unitId"], "name": u["unitName"] or f"单位#{u['unitId']}",
+                  "count": u["spawnCount"], "damage": u["totalDamage"], "roi": u["avgRoi"]}
+                 for u in player.analysis.get("highlightUnits", [])]
+    else:
+        # Older callers can still construct a Player without analysis data.
+        counts, names = Counter(), {}
+        for match in matches:
+            person = participant_for(match, player.id)
+            if person is not None:
+                for unit in person.units:
+                    uid = unit["id"]
+                    counts[uid] += unit["count"]
+                    if unit.get("name"):
+                        names.setdefault(uid, unit["name"])
+        units = [{"id": uid, "name": names.get(uid, f"单位#{uid}"), "count": count}
+                 for uid, count in counts.most_common()]
+    duplicates = Counter(unit["name"] for unit in units)
+    for unit in units:
+        if duplicates[unit["name"]] > 1:
+            unit["name"] += f"（ID：{unit['id']}）"
+    return units[:3]
+
+
+def overview_metrics(player, rows):
+    pairs = [row for row in rows if row["destroyed_value"] is not None and row["lost_value"] is not None]
+    points = player.analysis.get("trend", {}).get("points", [])
+    known = [point["won"] for point in points if isinstance(point.get("won"), bool)]
+    dated = [point for point in points if point.get("endTime") is not None and point.get("dmr") is not None]
+    latest = max(dated, key=lambda point: point["endTime"]) if dated else None
+    dmr_note = "分析单局"
+    if latest is not None:
+        dmr_note += f" · #{latest['matchId']}" if latest.get("matchId") is not None else ""
+    return [
+        {"label": "ELO", "value": player.elo},
+        {"label": "近期分值 K/D", "value": ratio(sum(row["destroyed_value"] for row in pairs),
+                                                    sum(row["lost_value"] for row in pairs)) if pairs else None,
+         "note": f"近期 {len(pairs)} 场摧毁分 ÷ 损失分"},
+        {"label": "分析样本胜率", "value": 100 * sum(known) / len(known) if known else None,
+         "format": "percent", "note": f"{sum(known)} 胜 / {len(known)} 场已知结果"},
+        {"label": "伤害交换比", "value": latest["dmr"] if latest else None, "note": dmr_note},
+    ]
 
 
 class StatsService:
@@ -272,49 +390,30 @@ STB ID：{binding.player_id}
                 view.update(freshness(player_result, result, detail))
                 return Response(view=view)
             return Response(f"{player.name} · STB ID：{player.id}\n当前返回样本中暂无可用单局战报。\n{player.source_url or ''}")
-        rows = recent_rows(matches, player.id)
+        rows = recent_rows(matches, player.id, player)
         times = [m.started_at for m in matches if m.started_at and any(p.player_id == player.id for p in m.players)]
-        scope = f"近期接口样本 · 实际 {len(rows)} 场（请求最多 {limit} 场）；非完整历史，模式以单局标注为准"
+        scope = f"近期{len(rows)}场"
+        analysis_count = player.analysis.get("matchCount")
+        if analysis_count is None:
+            analysis_count = len(player.analysis.get("trend", {}).get("points", []))
         view = {"kind": "recent" if request.action == "recent" else "overview",
                 "player": asdict(player), "rows": rows, "scope": scope,
+                "analysis_scope": f"分析样本{analysis_count}场 · 与近期样本独立" if player.analysis else "",
                 "source_url": player.source_url, **freshness(player_result, result)}
         if times:
             from zoneinfo import ZoneInfo
             zone = ZoneInfo(self.settings.timezone)
-            view["scope"] += f" · {min(times).astimezone(zone):%Y-%m-%d %H:%M} 至 {max(times).astimezone(zone):%Y-%m-%d %H:%M}"
+            view["scope"] += f" · {min(times).astimezone(zone):%m-%d}—{max(times).astimezone(zone):%m-%d}"
+            if len(times) != len(rows):
+                view["scope"] += f"（{len(times)}/{len(rows)} 场有开始时间）"
         if view["kind"] == "overview":
-            outcomes = Counter(row["outcome"] for row in rows)
-            known = outcomes["win"] + outcomes["loss"]
-            view["metrics"] = [
-                {"label": "ELO", "value": player.elo},
-                {"label": "样本场数", "value": len(rows), "format": "integer"},
-                {"label": "胜 / 负 / 未知", "value": f"{outcomes['win']} / {outcomes['loss']} / {outcomes['unknown']}"},
-                {"label": "已知结果胜率", "value": 100 * outcomes["win"] / known if known else None,
-                 "format": "percent", "note": f"分母为 {known} 场已知胜负样本"},
-            ]
-            counts = Counter()
-            names = {}
-            for match in matches:
-                person = participant_for(match, player.id)
-                if person is not None:
-                    for unit in person.units:
-                        uid = unit["id"]
-                        counts[uid] += unit["count"]
-                        if unit.get("name"):
-                            # Matches arrive newest first; names never define identity.
-                            names.setdefault(uid, unit["name"])
-            labels = {uid: names.get(uid, f"单位#{uid}") for uid in counts}
-            duplicates = Counter(labels.values())
-            view["common_units"] = [
-                {"id": uid, "name": f"{labels[uid]}（ID：{uid}）" if duplicates[labels[uid]] > 1 else labels[uid],
-                 "count": count}
-                for uid, count in counts.most_common(5)
-            ]
-            view["notes"] = ["常用单位按当前样本中的出场记录数统计；未收录名称时显示来源单位 ID。"]
-            if player.elo_observed_at:
-                from zoneinfo import ZoneInfo
-                at = player.elo_observed_at.astimezone(ZoneInfo(self.settings.timezone))
-                view["notes"].append(f"ELO 对应时间：{at:%Y-%m-%d %H:%M %Z}")
+            view["metrics"] = overview_metrics(player, rows)
+            view["common_units"] = common_units(player, matches)
+            view["map_stats"] = [{"name": m["mapName"] or f"地图#{m['mapId']}",
+                                  "count": m["matchCount"], "win_rate": m["winRate"]}
+                                 for m in player.analysis.get("mapPerformance", [])[:5]]
+            view["categories"] = [{"name": c["categoryKey"], "percentage": c["percentage"]}
+                                  for c in player.analysis.get("categoryPreferences", [])]
         return Response(view=view)
 
     def close(self):

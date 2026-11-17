@@ -24,7 +24,7 @@ from storage import Storage
 
 def configuration(**overrides):
     values = dict(enabled=True, base_url="https://synthetic.example.invalid",
-                  client_id="synthetic-quota-client", request_interval=0,
+                  request_interval=0,
                   retries=0, wait_timeout=5, request_timeout=1)
     values.update(overrides)
     return ClientConfig(**values)
@@ -380,7 +380,7 @@ async def test_cancellation_after_durable_reservation_conservatively_keeps_count
 
 
 @pytest.mark.asyncio
-async def test_clear_rotation_and_reopen_never_reset_any_daily_bucket(tmp_path):
+async def test_clear_source_change_and_reopen_never_reset_any_daily_bucket(tmp_path):
     calls = []
     def handler(request):
         calls.append(request)
@@ -392,8 +392,10 @@ async def test_clear_rotation_and_reopen_never_reset_any_daily_bucket(tmp_path):
         await first.clear_cache()
         assert await counts(storage, actor) == (1, 1, 1)
     async with running_client(
-        tmp_path, handler, user_daily_limit=2, client_id="rotated-synthetic", api_token="rotated-token",
+        tmp_path, handler, user_daily_limit=2, base_url="https://different.example.invalid",
     ) as (second, storage):
+        assert first.namespace != second.namespace
+        assert await counts(storage, actor) == (1, 1, 1)
         await search(second, actor, "Synthetic", force=True)
         assert await counts(storage, actor) == (2, 2, 2)
     async with running_client(tmp_path, handler, user_daily_limit=2) as (third, storage):
@@ -401,7 +403,7 @@ async def test_clear_rotation_and_reopen_never_reset_any_daily_bucket(tmp_path):
             await search(third, actor, "Synthetic", force=True)
         assert_quota(denied.value, "user", 2, 2)
         assert await counts(storage, actor) == (2, 2, 2)
-    assert len(calls) == 2
+    assert [request.url.host for request in calls] == ["synthetic.example.invalid", "different.example.invalid"]
 
 
 @pytest.mark.asyncio

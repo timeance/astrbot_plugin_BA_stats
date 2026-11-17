@@ -39,6 +39,7 @@ methods never query a service or load a remote avatar/font/resource.
 from __future__ import annotations
 
 from collections.abc import Mapping
+import base64
 from copy import deepcopy
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -123,6 +124,8 @@ class Renderer:
             raise ValueError("theme must be dark or light")
         self.theme = theme
         self.timezone = ZoneInfo(timezone)
+        self._avatar = "data:image/png;base64," + base64.b64encode(
+            (Path(__file__).parent / "assets" / "github-avatar.png").read_bytes()).decode("ascii")
         self._environment = Environment(
             loader=FileSystemLoader(Path(__file__).with_name("templates")),
             autoescape=select_autoescape(("html",)),
@@ -195,20 +198,33 @@ class Renderer:
         }
 
     def _exchange(self, item: Mapping, *, elo: bool = False) -> list[dict]:
-        fields = [
-            ("kills", "摧毁单位", "integer", "个"),
-            ("losses", "损失单位", "integer", "个"),
-            ("unit_exchange", "单位交换比", "decimal", ""),
-            ("destroyed_value", "摧毁价值", "decimal", ""),
-            ("lost_value", "损失价值", "decimal", ""),
-            ("value_exchange", "价值交换比", "decimal", ""),
-        ]
+        """Pair comparable values, preserving zero and unknown independently."""
+        def value(key, style="decimal"):
+            raw = item.get(key)
+            return _plain(raw) if isinstance(raw, str) else _numeric(raw, style)
+
+        def pair(first, second, style="decimal"):
+            return f"{value(first, style)} / {value(second, style)}"
+
+        metrics = []
         if elo:
-            fields = [("elo", "ELO", "decimal", ""), ("elo_delta", "ELO 变化", "signed", "")] + fields
-        return [
-            self._metric({"label": label, "value": item.get(key), "format": style, "unit": unit})
-            for key, label, style, unit in fields
-        ]
+            rating = value("elo")
+            delta = value("elo_delta", "signed")
+            metrics.append({"label": "ELO", "value": rating + (f" ({delta})" if delta != MISSING else "")})
+        metrics.extend([
+            {"label": "分值 K/D", "value": value("value_exchange")},
+            {"label": "摧毁 / 损失", "value": pair("destroyed_value", "lost_value")},
+            {"label": "击杀 / 阵亡", "value": pair("kills", "losses", "integer")},
+        ])
+        if elo:
+            if any(item.get(key) is not None for key in ("damage_dealt", "damage_received")):
+                metrics.append({"label": "伤害 / 承伤", "value": pair("damage_dealt", "damage_received")})
+            for key, label, style in (("objectives", "占点", "integer"),
+                                      ("spawned_value", "出兵花费", "decimal"),
+                                      ("supply", "补给消耗", "decimal")):
+                if item.get(key) is not None:
+                    metrics.append({"label": label, "value": value(key, style)})
+        return [self._metric(metric) for metric in metrics]
 
     def _prepare(self, view: dict) -> dict:
         kind = view.get("kind", "overview")
@@ -218,6 +234,7 @@ class Renderer:
         match = _mapping(view.get("match"))
         prepared = {
             "kind": kind,
+            "avatar": self._avatar,
             "title": _plain(view.get("title"), _TITLES[kind]),
             "theme": self.theme,
             "player": {
@@ -234,15 +251,25 @@ class Renderer:
             "synthetic": view.get("synthetic") is True,
             "notes": [_plain(note) for note in view.get("notes", [])] if isinstance(view.get("notes"), (list, tuple)) else [],
             "common_units": [
-                {"name": _plain(item.get("name")), "count": _numeric(item.get("count"), "integer")}
+                {"name": _plain(item.get("name")), "count": _numeric(item.get("count"), "integer"),
+                 "damage": _numeric(item.get("damage")), "roi": _numeric(item.get("roi"))}
                 for item in _records(view.get("common_units"))
             ],
+            "analysis_scope": _plain(view.get("analysis_scope"), ""),
+            "categories": [{"name": _plain(item.get("name")), "percentage": _numeric(item.get("percentage"))}
+                           for item in _records(view.get("categories"))],
+            "map_stats": [{"name": _plain(item.get("name")), "count": _numeric(item.get("count"), "integer"),
+                           "win_rate": _numeric(item.get("win_rate"))}
+                          for item in _records(view.get("map_stats"))],
             "rows": [],
             "teams": [],
             "pagination": "",
         }
         for item in _records(view.get("rows")):
+            score = _number(item.get("score"))
             prepared["rows"].append({
+                "score": format(score, ".1f") if score is not None else MISSING,
+                "score_band": item.get("score_band") if item.get("score_band") in {"low", "medium", "high"} else "medium",
                 "id": _plain(item.get("id")),
                 "started_at": self._time(item.get("started_at")),
                 "map_name": _plain(item.get("map_name")),
@@ -260,16 +287,36 @@ class Renderer:
             "started_at": self._time(match.get("started_at")),
             "duration": self._duration(match.get("duration_seconds")),
             "winner": _plain(match.get("winner")),
+            "target_outcome": _outcome(match.get("target_outcome")),
         }
         for team in _records(view.get("teams")):
             prepared["teams"].append({
                 "name": _plain(team.get("name")),
                 "outcome": _outcome(team.get("outcome")),
+                "metrics": [self._metric(item) for item in _records(team.get("metrics"))],
+                "composition": [{"name": _plain(item.get("name")), "percentage": _numeric(item.get("percentage")),
+                                  "width": float(max(0, min(100, _number(item.get("percentage")) or 0)))}
+                                 for item in _records(team.get("composition"))],
+                "composition_note": _plain(team.get("composition_note"), ""),
                 "players": [
-                    {"id": _plain(item.get("id")), "name": _plain(item.get("name")), "metrics": self._exchange(item, elo=True)}
+                    {"id": _plain(item.get("id")), "name": _plain(item.get("name")),
+                     "is_target": bool(player.get("id")) and item.get("id") == player.get("id"),
+                     "metrics": self._exchange(item, elo=True)}
                     for item in _records(team.get("players"))
                 ],
             })
+        prediction = _mapping(view.get("prediction"))
+        a, b = _number(prediction.get("a")), _number(prediction.get("b"))
+        prepared["prediction"] = ({"a": _numeric(a), "b": _numeric(b), "width": float(a)}
+                                  if a is not None and b is not None and 0 <= a <= 100 and 0 <= b <= 100 else None)
+        # Each comparison row keeps the actual team order and both denominators.
+        labels = list(dict.fromkeys(m["label"] for team in prepared["teams"][:2] for m in team["metrics"]))
+        prepared["comparisons"] = []
+        for label in labels:
+            pair = [next((m for m in team["metrics"] if m["label"] == label), None) for team in prepared["teams"][:2]]
+            if len(pair) == 2:
+                prepared["comparisons"].append({"label": label, "values": [m["display"] if m else MISSING for m in pair],
+                                                 "notes": [m["note"] if m else "" for m in pair]})
         page = _number(view.get("page"))
         page_count = _number(view.get("page_count"))
         row_total = _number(view.get("row_total"))
@@ -284,63 +331,98 @@ class Renderer:
         return self._environment.get_template(f"{prepared['kind']}.html").render(view=prepared)
 
     def text(self, view: dict) -> str:
-        """Use the HTML presentation values verbatim in a readable fallback."""
+        """Compact report using the same formatted facts as the image card."""
         data = self._prepare(view)
         lines = [f"断箭战报 · {data['title']}"]
         if data["synthetic"]:
             lines.append("合成样本 · 非真实玩家战绩")
         if data["kind"] != "match" or data["player"]["id"] != MISSING:
-            lines.extend([data["player"]["name"], f"玩家 ID：{data['player']['id']}"])
-        lines.append(f"统计范围：{data['scope']}")
+            lines.append(f"{data['player']['name']} · ID {data['player']['id']}")
+            if data["kind"] == "match" and data["match"]["target_outcome"]["key"] != "unknown":
+                lines[-1] += " · " + data["match"]["target_outcome"]["label"]
+        if data["scope"] != MISSING:
+            lines.append(data["scope"])
         if data["pagination"]:
             lines.append(data["pagination"])
-        for metric in data["metrics"]:
-            lines.append(f"{metric['label']}：{metric['display']}" + (f"（{metric['note']}）" if metric["note"] else ""))
+
+        def metrics(items):
+            return " · ".join(f"{m['label']}：{m['display']}" + (f"（{m['note']}）" if m["note"] else "") for m in items)
+
         if data["kind"] == "overview":
+            for offset in range(0, len(data["metrics"]), 2):
+                lines.append(metrics(data["metrics"][offset:offset + 2]))
             if not data["metrics"]:
                 lines.append("统计指标：暂无")
-            lines.append("常用单位 / 兵种")
-            lines.extend(f"{unit['name']}：{unit['count']}" + (" 个" if unit["count"] != MISSING else "") for unit in data["common_units"])
-            if not data["common_units"]:
-                lines.append(MISSING)
+            if data["analysis_scope"]:
+                lines.append(data["analysis_scope"])
+            if data["categories"]:
+                lines.append("兵种：" + " · ".join(f"{c['name']} {c['percentage']}%" for c in data["categories"]))
+            if data["common_units"]:
+                lines.append("常用单位")
+                for unit in data["common_units"]:
+                    detail = [f"{unit['count']} 次出场"] if unit['count'] != MISSING else []
+                    if unit['damage'] != MISSING:
+                        detail.append(f"伤害 {unit['damage']}")
+                    if unit['roi'] != MISSING:
+                        detail.append(f"回报 {unit['roi']}")
+                    lines.append(unit['name'] + (" · " + " · ".join(detail) if detail else ""))
+            if data["map_stats"]:
+                lines.append("地图表现")
+                for row in data["map_stats"]:
+                    rate = row['win_rate'] + '%' if row['win_rate'] != MISSING else MISSING
+                    lines.append(f"{row['name']} · {row['count']} 场 · 胜率 {rate}")
         elif data["kind"] == "recent":
-            for index, row in enumerate(data["rows"], 1):
-                lines.extend([
-                    f"{index}. {row['map_name']} · {row['outcome']['label']}",
-                    f"对局 ID：{row['id']}",
-                    f"时间：{row['started_at']} · 模式：{row['mode']} · 时长：{row['duration']}",
-                    f"ELO 变化：{row['elo_delta']}",
-                    "；".join(f"{metric['label']}：{metric['display']}" for metric in row["exchange"]),
-                ])
-                if row["source_url"]:
-                    lines.append(f"对局来源：{row['source_url']}")
+            for row in data["rows"]:
+                heading = [f"评分 {row['score']}", row['outcome']['label'], row['map_name']]
+                if row['duration'] != MISSING:
+                    heading.append(row['duration'])
+                lines.append(" · ".join(heading))
+                detail = [f"ELO {row['elo_delta']}"] if row['elo_delta'] != MISSING else []
+                detail.extend(f"{m['label']} {m['display']}" for m in row['exchange'])
+                lines.append(" · ".join(detail))
+                lines[-1] += f" · #{row['id']}"
             if not data["rows"]:
                 lines.append("近期对局：暂无")
         else:
             match = data["match"]
-            lines.extend([
-                f"对局 ID：{match['id']}",
-                f"地图：{match['map_name']} · 模式：{match['mode']}",
-                f"时间：{match['started_at']} · 时长：{match['duration']}",
-                f"胜方：{match['winner']}",
-            ])
+            lines.append(f"#{match['id']} · {match['map_name']} · {match['duration']}")
+            meta = []
+            if match['mode'] != MISSING:
+                meta.append(match['mode'])
+            if match['started_at'] != MISSING:
+                meta.append(match['started_at'])
+            if match['winner'] != MISSING:
+                meta.append(f"胜方：{match['winner']}")
+            if meta:
+                lines.append(" · ".join(meta))
+            prediction = data["prediction"]
+            lines.append(f"赛前预测 A {prediction['a']}% : B {prediction['b']}%（按赛前 ELO 估算）" if prediction else "赛前预测：暂无")
+            if data["comparisons"]:
+                lines.append("双方对比（" + " / ".join(t["name"] for t in data["teams"][:2]) + "）")
+                for row in data["comparisons"]:
+                    lines.append(f"{row['label']}：" + " / ".join(v + (f"（{n}）" if n else "") for v, n in zip(row['values'], row['notes'])))
+            lines.append("兵种构成（基础花费估算）")
             for team in data["teams"]:
-                lines.append(f"{team['name']} · {team['outcome']['label']} · {len(team['players'])} 人")
+                lines.append(team['name'] + "：" + (" · ".join(f"{c['name']} {c['percentage']}%" for c in team['composition']) or "暂无"))
+                if team['composition_note']:
+                    lines.append(team['composition_note'])
+            lines.append("玩家")
+            for team in data["teams"]:
+                heading = f"{team['name']} · {len(team['players'])} 人"
+                if team['outcome']['key'] != 'unknown':
+                    heading += " · " + team['outcome']['label']
+                lines.extend(["", heading])
                 for player in team["players"]:
-                    lines.append(f"{player['name']} · 玩家 ID：{player['id']}")
-                    lines.append("；".join(f"{metric['label']}：{metric['display']}" for metric in player["metrics"]))
+                    lines.append(player['name'] + ("（查询玩家）" if player['is_target'] else ""))
+                    for offset in range(0, len(player['metrics']), 3):
+                        lines.append(metrics(player['metrics'][offset:offset + 3]))
                 if not team["players"]:
                     lines.append("队员：暂无")
             if not data["teams"]:
                 lines.append("分队与玩家：暂无")
         lines.extend(data["notes"])
         if data["stale"]:
-            lines.append("旧缓存 · 以抓取时间为准")
-        lines.extend([
-            f"抓取时间：{data['fetched_at']}",
-            f"来源更新：{data['source_updated_at']}",
-            f"数据来源：{data['source_url'] or MISSING}",
-        ])
-        if data["player"]["source_url"] and data["player"]["source_url"] != data["source_url"]:
-            lines.append(f"玩家来源：{data['player']['source_url']}")
+            lines.append(f"旧缓存 · 抓取时间：{data['fetched_at']}")
+        if data["source_url"]:
+            lines.append(f"BATrace：{data['source_url']}")
         return "\n".join(lines)

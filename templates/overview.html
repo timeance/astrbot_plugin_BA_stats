@@ -1,13 +1,18 @@
 {% extends "base.html" %}
 {% block content %}
-<section aria-label="常用单位与兵种">
-  <h2 class="section-heading">常用单位 / 兵种</h2>
-  {% if view.common_units %}
-  <ul class="unit-list">
-    {% for unit in view.common_units %}
-    <li><span class="unit-name">{{ unit.name }}</span><span class="unit-count">{{ unit.count }}{% if unit.count != '暂无' %} 个{% endif %}</span></li>
-    {% endfor %}
-  </ul>
-  {% else %}<p class="empty">暂无</p>{% endif %}
-</section>
+{% if view.analysis_scope %}<p class="scope">{{ view.analysis_scope }}</p>{% endif %}
+{% if view.categories %}<p class="compact-line">{% for c in view.categories %}<span>{{ c.name }} {{ c.percentage }}%</span>{% endfor %}</p>{% endif %}
+{% if view.common_units %}
+<section aria-label="常用单位">
+  <h2 class="section-heading">常用单位</h2>
+  <table class="report-table"><thead><tr><th>单位</th><th>出场</th><th>伤害</th><th>回报</th></tr></thead><tbody>
+    {% for unit in view.common_units %}<tr><td>{{ unit.name }}</td><td>{{ unit.count }}</td><td>{{ unit.damage }}</td><td>{{ unit.roi }}</td></tr>{% endfor %}
+  </tbody></table>
+</section>{% endif %}
+{% if view.map_stats %}<section aria-label="地图表现">
+  <h2 class="section-heading">地图表现</h2>
+  <table class="report-table"><thead><tr><th>地图</th><th>局数</th><th>胜率</th></tr></thead><tbody>
+    {% for row in view.map_stats %}<tr><td>{{ row.name }}</td><td>{{ row.count }}</td><td>{{ row.win_rate }}{% if row.win_rate != '暂无' %}%{% endif %}</td></tr>{% endfor %}
+  </tbody></table>
+</section>{% endif %}
 {% endblock %}

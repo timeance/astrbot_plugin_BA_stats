@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
+import json
 import time
 
 import httpx
@@ -20,7 +21,7 @@ from quota import GLOBAL_DAILY_LIMIT, QuotaActor, QuotaExceededError
 
 def config(**kwargs):
     defaults = dict(enabled=True, base_url="https://synthetic.example.invalid",
-                    client_id="synthetic-ba-stats", request_interval=0, retries=0,
+                    request_interval=0, retries=0,
                     request_timeout=0.2, wait_timeout=1)
     defaults.update(kwargs)
     return ClientConfig(**defaults)
@@ -105,11 +106,15 @@ async def test_disabled_access_never_touches_http_or_cache():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("changes", [
-    {"client_id": ""}, {"client_id": "ba-dragon-app"}, {"client_id": "ba-dragon-collector"},
     {"base_url": "http://synthetic.invalid"}, {"base_url": "https://name:secret@synthetic.invalid"},
-    {"base_url": "https://synthetic.invalid/?secret=1"}, {"client_id": "test\r\nX: bad"},
+    {"base_url": "https://synthetic.invalid/?secret=1"}, {"base_url": "https://synthetic.invalid/#fragment"},
+    {"base_url": "https://synthetic.invalid/api"}, {"base_url": "https://synthetic.invalid:bad"},
+    {"base_url": "https://synthetic.invalid:0"}, {"base_url": "https://synthetic.invalid:65536"},
+    {"base_url": "https://synthetic.in\tvalid"}, {"base_url": "https://synthetic.invalid\\other"},
+    {"base_url": "https://@synthetic.invalid"},
+    {"base_url": ""},
 ])
-async def test_invalid_or_impersonated_access_fails_closed(changes):
+async def test_invalid_access_fails_closed(changes):
     client = BatraceClient(config(**changes))
     with pytest.raises(NotConfiguredError):
         await client.search("Synthetic")
@@ -117,25 +122,25 @@ async def test_invalid_or_impersonated_access_fails_closed(changes):
     await client.close()
 
 
-def test_binding_namespace_survives_credentials_and_tracks_source():
-    a = BatraceClient(config(api_token="first"))
-    b = BatraceClient(config(client_id="rotated", api_token="second"))
+def test_binding_and_cache_namespaces_track_source():
+    a = BatraceClient(config())
+    b = BatraceClient(config(base_url="https://synthetic.example.invalid/"))
     c = BatraceClient(config(base_url="https://different.example.invalid"))
     assert a.namespace == b.namespace != c.namespace
-    assert a._namespace != b._namespace
+    assert a._namespace == b._namespace != c._namespace
     status = str(a.status())
-    assert "first" not in status and "synthetic.example" not in status
-    assert "first" not in repr(a.config)
+    assert "synthetic.example" not in status
 
 
 @pytest.mark.asyncio
-async def test_paths_query_encoding_and_plugin_identity():
+@pytest.mark.parametrize("base_url", ["https://synthetic.example.invalid", "https://different.example.invalid"])
+async def test_paths_query_encoding_and_plugin_identity(base_url):
     requests = []
     def handler(request):
         requests.append(request)
         return httpx.Response(200, json=search_payload())
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        client = BatraceClient(config(api_token="synthetic-token"), http_client=http)
+        client = BatraceClient(config(base_url=base_url), http_client=http)
         result = await client.search('Player 2 & "中文"')
         assert result.data[0].id == "001"
         assert result.fetched_at.tzinfo == timezone.utc
@@ -143,9 +148,9 @@ async def test_paths_query_encoding_and_plugin_identity():
         request = requests[0]
         assert request.url.path == "/api/players/search"
         assert dict(request.url.params) == {"q": 'Player 2 & "中文"', "limit": "20"}
-        assert request.headers["X-Client"] == "synthetic-ba-stats"
+        assert request.headers["X-Client"] == "Astrbot_BA_Stats"
         assert request.headers["User-Agent"] == "astrbot-plugin-ba-stats"
-        assert request.headers["Authorization"] == "Bearer synthetic-token"
+        assert "Authorization" not in request.headers
         assert request.extensions["timeout"]["read"] == 0.2
         await client.close()
         assert not http.is_closed
@@ -628,6 +633,34 @@ async def test_complete_old_match_cache_is_long_but_fresh_or_partial_is_short(co
         client = BatraceClient(config(), storage=store, http_client=http)
         assert (await client.match("42")).data.id == "42"
         assert store.ttls[-1] == ttl
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_start,ended,ttl", [
+    (True, 1700001200, 86400), (True, "now", 60), (False, "now", 60),
+])
+async def test_match_cache_age_uses_observed_end_not_start_plus_duration(missing_start, ended, ttl):
+    payload = match_payload(ended=time.time() if ended == "now" else ended)
+    if missing_start:
+        payload["matchInfo"].pop("StartTime")
+    else:
+        payload["matchInfo"]["TotalPlayTimeInSec"] = 1  # Inference would incorrectly age this by 599s.
+    store = MemoryStorage()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _: httpx.Response(200, json=payload)
+    )) as http:
+        client = BatraceClient(config(), storage=store, http_client=http)
+        result = await client.match("42")
+        assert result.data.ended_at.timestamp() == pytest.approx(payload["matchInfo"]["EndTime"], abs=1e-6, rel=0)
+        if missing_start:
+            assert result.data.started_at is None
+        assert store.ttls[-1] == ttl
+        key, (raw, fetched, expires) = next(iter(store.entries.items()))
+        # Avoid sub-microsecond clock rounding making a just-written fetch look future-dated.
+        store.entries[key] = (json.loads(json.dumps(raw, allow_nan=False)), fetched - 1, expires)
+        assert (await client.match("42")).data == result.data  # Raw cache reparse retains the timestamps.
+        assert client.status()["requests"] == 1
         await client.close()
 
 

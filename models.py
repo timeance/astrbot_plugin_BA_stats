@@ -26,6 +26,8 @@ class Player:
     source_url: str | None = None
     updated_at: datetime | None = None
     elo_observed_at: datetime | None = None
+    # Source analysis keys are retained; IDs, numbers, booleans and times are normalized.
+    analysis: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -41,6 +43,15 @@ class Participant:
     destroyed_value: float | None = None
     lost_value: float | None = None
     units: list[dict[str, Any]] = field(default_factory=list)
+    damage_dealt: float | None = None
+    damage_received: float | None = None
+    objectives: int | None = None
+    spawned_value: float | None = None
+    supply: float | None = None
+    # Keep the pre-match observation even when NewRating is unavailable.
+    elo_before: float | None = None
+    # An empty supplied UnitData is different from a missing UnitData.
+    units_available: bool = False
 
 
 @dataclass
@@ -55,6 +66,9 @@ class Match:
     complete: bool = False
     source_url: str | None = None
     updated_at: datetime | None = None
+    map_id: str | None = None
+    # Start/end are source observations, never inferred from duration.
+    ended_at: datetime | None = None
 
 
 @dataclass
@@ -130,6 +144,109 @@ def _name(value: Any) -> str:
     return value
 
 
+def _nonnegative(value: Any) -> float | None:
+    result = _number(value)
+    if result is not None and result < 0:
+        raise ValueError("expected a nonnegative number")
+    return result
+
+
+def _percentage(value: Any) -> float | None:
+    result = _nonnegative(value)
+    if result is not None and result > 100:
+        raise ValueError("expected a percentage in 0..100")
+    return result
+
+
+def _array(obj: dict[str, Any], key: str) -> list:
+    result = obj.get(key, [])
+    if not isinstance(result, list):
+        raise ValueError(f"invalid {key} array")
+    return result
+
+
+def _parse_analysis(payload: Any) -> dict[str, Any]:
+    analysis = _object(payload)
+    if "matchCount" not in analysis and "trend" not in analysis:
+        raise ValueError("missing player analysis")
+    trend = _object(analysis.get("trend", {}))
+    points: list[dict[str, Any]] = []
+    positions: dict[str, int] = {}
+    results: dict[str, set[bool]] = {}
+    for raw in _array(trend, "points"):
+        row = _object(raw)
+        won = row.get("won")
+        if won is not None and not isinstance(won, bool):
+            raise ValueError("expected a boolean won")
+        point = {
+            "matchId": canonical_id(row["matchId"]) if row.get("matchId") is not None else None,
+            "won": won,
+            "ratingBefore": _number(row.get("ratingBefore")),
+            "ratingAfter": _number(row.get("ratingAfter")),
+            "kdRatio": _nonnegative(row.get("kdRatio")),
+            "dmr": _nonnegative(row.get("dmr")),
+            "destructionScore": _nonnegative(row.get("destructionScore")),
+            "lossesScore": _nonnegative(row.get("lossesScore")),
+            "objectivesCaptured": _number(row.get("objectivesCaptured"), count=True),
+            "endTime": utc_datetime(row.get("endTime")),
+        }
+        mid = point["matchId"]
+        if mid is None:
+            points.append(point)
+            continue
+        outcomes = results.setdefault(mid, set())
+        if won is not None:
+            outcomes.add(won)
+        if mid not in positions:
+            positions[mid] = len(points)
+            points.append(point)
+        else:
+            previous = points[positions[mid]]
+            # Keep the newest dated record, but never resolve contradictory results by order.
+            if point["endTime"] is not None and (
+                previous["endTime"] is None or point["endTime"] > previous["endTime"]
+            ):
+                points[positions[mid]] = point
+        points[positions[mid]]["won"] = next(iter(outcomes)) if len(outcomes) == 1 else None
+    units = []
+    for raw in _array(analysis, "highlightUnits"):
+        row = _object(raw)
+        units.append({
+            "unitId": canonical_id(row.get("unitId")),
+            "unitName": _name(row.get("unitName")) or None,
+            "spawnCount": _number(row.get("spawnCount"), count=True),
+            "totalDamage": _nonnegative(row.get("totalDamage")),
+            "avgRoi": _number(row.get("avgRoi")),
+            **({"categoryType": _number(row["categoryType"], count=True)}
+               if "categoryType" in row else {}),
+            **({"totalCost": _nonnegative(row["totalCost"])} if "totalCost" in row else {}),
+        })
+    categories = []
+    for raw in _array(analysis, "categoryPreferences"):
+        row = _object(raw)
+        categories.append({
+            "categoryKey": canonical_id(row.get("categoryKey")),
+            "percentage": _percentage(row.get("percentage")),
+            **({"totalCost": _nonnegative(row["totalCost"])} if "totalCost" in row else {}),
+        })
+    maps = []
+    for raw in _array(analysis, "mapPerformance"):
+        row = _object(raw)
+        maps.append({
+            "mapId": canonical_id(row.get("mapId")),
+            "mapName": _name(row.get("mapName")) or None,
+            "matchCount": _number(row.get("matchCount"), count=True),
+            "winRate": _percentage(row.get("winRate")),
+        })
+    return {
+        "matchCount": _number(analysis.get("matchCount"), count=True),
+        "trend": {"points": points},
+        "highlightUnits": units,
+        "categoryPreferences": categories,
+        "mapPerformance": maps,
+    }
+
+
 def parse_search(payload: Any) -> list[Player]:
     """Search has an explicit players array; missing arrays are schema failures."""
     rows = _object(payload).get("players")
@@ -164,20 +281,11 @@ def parse_player(payload: Any, requested_id: str) -> Player:
     player = next((p for p in candidates if p.id == requested_id), None)
     if player is None:
         raise ValueError("canonical player ID was not echoed")
-    analysis = _object(envelope.get("analysis"))
-    if "matchCount" not in analysis and "trend" not in analysis:
-        raise ValueError("missing player analysis")
-    if "matchCount" in analysis:
-        _number(analysis["matchCount"], count=True)
-    trend = _object(analysis.get("trend", {}))
-    points = trend.get("points", [])
-    if not isinstance(points, list):
-        raise ValueError("invalid trend points")
+    player.analysis = _parse_analysis(envelope.get("analysis"))
     observations: list[tuple[datetime, float]] = []
-    for row in points:
-        point = _object(row)
-        rating = _number(point.get("ratingAfter"))
-        at = utc_datetime(point.get("endTime"))
+    for point in player.analysis["trend"]["points"]:
+        rating = point["ratingAfter"]
+        at = point["endTime"]
         if rating is not None and at is not None:
             observations.append((at, rating))
     if observations:
@@ -220,10 +328,17 @@ def parse_match(payload: Any, requested_id: str, *, detail: bool = True) -> Matc
         normalized_units = []
         for unit in units.values():
             unit = _object(unit)
+            refunded = unit.get("WasRefunded", False)
+            if not isinstance(refunded, bool):
+                raise ValueError("expected a boolean WasRefunded")
             normalized_units.append({
                 "id": canonical_id(unit.get("Id")),
                 "name": _name(unit.get("Name")) or None,
                 "count": 1,
+                "spawn_time": _nonnegative(unit.get("SpawnTime", 0)),
+                "death_time": _nonnegative(unit.get("DeathTime", 0)),
+                "was_refunded": refunded,
+                "killed_count": _number(unit.get("KilledCount", 0), count=True),
             })
         players.append(Participant(
             player_id=pid, name=_name(row.get("Name")), team=str(team),
@@ -232,15 +347,18 @@ def parse_match(payload: Any, requested_id: str, *, detail: bool = True) -> Matc
             losses=_number(row.get("Losses", 0), count=True),
             destroyed_value=_number(row.get("DestructionScore", 0)),
             lost_value=_number(row.get("LossesScore", 0)), units=normalized_units,
+            damage_dealt=_nonnegative(row.get("DamageDealt")),
+            damage_received=_nonnegative(row.get("DamageReceived")),
+            objectives=_number(row.get("ObjectivesCaptured"), count=True),
+            spawned_value=_nonnegative(row.get("TotalSpawnedUnitScore")),
+            supply=_nonnegative(row.get("SupplyPointsConsumed")),
+            elo_before=old, units_available="UnitData" in row,
         ))
     duration = _number(info.get("TotalPlayTimeInSec"))
     if duration is not None and duration < 0:
         raise ValueError("negative duration")
     start = utc_datetime(info.get("StartTime"))
     end = utc_datetime(info.get("EndTime"))
-    if start is None and end is not None and duration is not None:
-        from datetime import timedelta
-        start = end - timedelta(seconds=duration)
     if end is not None and start is not None and end < start:
         raise ValueError("match ends before it starts")
     # The reference infers victory from rating changes. This is not an
@@ -250,9 +368,11 @@ def parse_match(payload: Any, requested_id: str, *, detail: bool = True) -> Matc
     complete = detail and bool(players) and end is not None and all(
         isinstance(row, dict) and isinstance(row.get("UnitData"), dict) for row in rows.values()
     )
+    map_id = canonical_id(info["MapId"]) if "MapId" in info else None
     return Match(
-        id=requested_id, map_name=(f"地图#{canonical_id(info['MapId'])}" if "MapId" in info else None),
-        started_at=start, duration_seconds=duration,
+        id=requested_id, map_name=(f"地图#{map_id}" if map_id is not None else None),
+        map_id=map_id,
+        started_at=start, duration_seconds=duration, ended_at=end,
         players=players, complete=complete,
         source_url=SOURCE_URL + "match/" + quote(requested_id, safe=""),
     )
@@ -271,4 +391,4 @@ def parse_recent(payload: Any) -> list[Match]:
             result[mid] = match
     from datetime import timezone
     minimum = datetime.min.replace(tzinfo=timezone.utc)
-    return sorted(result.values(), key=lambda m: (m.started_at or minimum, m.id), reverse=True)
+    return sorted(result.values(), key=lambda m: (m.ended_at or m.started_at or minimum, m.id), reverse=True)

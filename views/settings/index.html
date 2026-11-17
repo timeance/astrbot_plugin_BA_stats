@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>断箭战报 · 设置中心</title>
+  <style>
+    /* The official AstrBot bridge sets data-theme initially and on change. */
+    :root {
+      color-scheme: light;
+      --bg: #fff; --surface: #f4f6f9; --text: #202631; --muted: #566171;
+      --border: #d9dfe8; --accent: #245bb2; --selected: #e8effb; --error: #b12626;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #191d24; --surface: #232a35; --text: #edf1f7; --muted: #b2bdcc;
+      --border: #465163; --accent: #a1c2ff; --selected: #293a54; --error: #ffa5a5;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.65 system-ui, "Microsoft YaHei", sans-serif; }
+    main { max-width: 1150px; margin: auto; padding: 24px; }
+    h1 { margin: 0; font-size: 24px; } h2 { margin: 0 0 8px; font-size: 20px; }
+    h3 { margin: 0 0 16px; font-size: 17px; }
+    p { margin: 8px 0 16px; } .muted, .hint { color: var(--muted); }
+    .layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 32px; margin-top: 24px; }
+    nav { display: flex; flex-direction: column; gap: 6px; align-self: start; position: sticky; top: 20px; }
+    button, input, select { font: inherit; }
+    button { border: 1px solid var(--border); border-radius: 6px; padding: 8px 14px; background: var(--surface); color: var(--text); cursor: pointer; }
+    nav button { text-align: left; border-color: transparent; background: transparent; }
+    nav button[aria-current="page"] { color: var(--accent); background: var(--selected); font-weight: 600; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+    button:hover:enabled { border-color: var(--accent); }
+    button:disabled { opacity: .55; cursor: default; }
+    button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .group + .group { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border); }
+    .field { margin: 0 0 20px; }
+    .field > label { display: block; font-weight: 600; margin-bottom: 6px; }
+    .field input:not([type="checkbox"]), .field select { width: 100%; max-width: 540px; min-width: 0; padding: 9px 11px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--text); }
+    .field input[type="number"] { max-width: 210px; }
+    .field input[type="checkbox"] { width: 18px; height: 18px; margin: 0 10px 0 0; vertical-align: middle; accent-color: var(--accent); }
+    .field .hint { margin: 5px 0 0; max-width: 680px; overflow-wrap: anywhere; }
+    [data-pending="true"] > label::after { content: " · 待重载"; color: var(--accent); font-size: 13px; font-weight: 400; }
+    details { border-top: 1px solid var(--border); }
+    summary { padding: 15px 0; font-weight: 600; cursor: pointer; }
+    .details-body { padding: 8px 0 16px; }
+    dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 18px 0; padding: 14px; background: var(--surface); border-radius: 6px; }
+    dt { color: var(--muted); font-size: 13px; } dd { margin: 3px 0 0; overflow-wrap: anywhere; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    .save-row { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0; margin-top: 24px; border-top: 1px solid var(--border); background: var(--bg); }
+    .save-row p { margin: 0; overflow-wrap: anywhere; }
+    [data-error="true"] { color: var(--error); }
+    [hidden] { display: none !important; }
+    @media (max-width: 700px) {
+      main { padding: 18px; } .layout { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+      nav { position: static; flex-direction: row; flex-wrap: wrap; gap: 4px; }
+      nav button { padding: 8px 10px; }
+    }
+    @media (max-width: 420px) { dl { grid-template-columns: 1fr; } .save-row { align-items: stretch; flex-direction: column; gap: 10px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>断箭战报设置中心</h1>
+    <p class="muted">诊断开关保存后即时生效。其他设置保存后，请在 AstrBot 插件页手动重载；正在处理的请求不会因本页保存而中断。</p>
+    <div class="layout">
+      <nav aria-label="设置分组">
+        <button type="button" data-section="common" aria-current="page" aria-controls="common">常用设置</button>
+        <button type="button" data-section="limits" aria-controls="limits">每日额度</button>
+        <button type="button" data-section="maintenance" aria-controls="maintenance">维护设置</button>
+        <button type="button" data-section="diagnostics" aria-controls="diagnostics">诊断日志</button>
+      </nav>
+      <form id="settings-form" novalidate>
+        <p id="apply-state" class="muted" role="status"></p>
+        <section id="common" data-panel>
+          <div class="group" data-group="access"></div>
+          <div class="group" data-group="query"></div>
+          <div class="group" data-group="output"></div>
+        </section>
+        <section id="limits" data-panel hidden><div class="group" data-group="limits"></div></section>
+        <section id="maintenance" data-panel hidden>
+          <h2>维护设置</h2>
+          <details><summary>请求调度与缓存</summary><div class="details-body" data-group="maintenance"></div></details>
+        </section>
+        <section id="diagnostics" data-panel hidden>
+          <h2>诊断日志</h2>
+          <details><summary>诊断模式与日志下载</summary><div class="details-body">
+            <div data-group="diagnostics"></div>
+            <dl aria-label="当前诊断状态">
+              <div><dt>运行状态</dt><dd id="diagnostics-mode">正在读取…</dd></div>
+              <div><dt>日志容量</dt><dd id="diagnostics-capacity">—</dd></div>
+              <div><dt>日志文件</dt><dd id="diagnostics-files">—</dd></div>
+            </dl>
+            <p id="log-state" class="muted">正在读取诊断状态。</p>
+            <div class="actions">
+              <button id="refresh-diagnostics" type="button" disabled>刷新状态</button>
+              <button id="download" type="button" disabled>下载诊断日志（ZIP）</button>
+            </div>
+            <p id="download-status" role="status" aria-live="polite"></p>
+          </div></details>
+        </section>
+        <div class="save-row">
+          <p id="save-status" role="status" aria-live="polite">正在读取设置…</p>
+          <div class="actions">
+            <button id="reload" type="button" disabled>重新读取</button>
+            <button id="save" class="primary" type="submit" disabled>保存设置</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </main>
+  <script type="module" src="./settings.js"></script>
+</body>
+</html>

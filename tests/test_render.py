@@ -69,8 +69,7 @@ def test_identity_scope_precision_and_same_text_values(view, theme):
     text = renderer.text(view)
     for value in [
         "00076561198012345678", "合成样本玩家", view["scope"],
-        "62.50%", "8场", "1.23", "2.79", "2026-11-17 10:30 CST",
-        "2026-11-17 10:20 CST", "合成样本", view["source_url"],
+        "62.50%", "8场", "1.23", "2.79", "合成样本",
     ]:
         assert compact(value) in compact(visible)
         assert compact(value) in compact(text)
@@ -94,7 +93,7 @@ def test_external_text_is_escaped_in_every_card(view, kind):
     html = renderer.template(view)
     visible = VisibleHTML(html)
     assert "&lt;img" in html
-    assert not any(tag in {"img", "script", "iframe"} for tag, _ in visible.tags)
+    assert not any(tag in {"script", "iframe"} or (tag == "img" and not attrs.get("src", "").startswith("data:image/png;base64,")) for tag, attrs in visible.tags)
     assert attack in visible.text
     assert attack in renderer.text(view)
 
@@ -121,18 +120,19 @@ def test_unsafe_source_urls_are_omitted_everywhere(view, url):
     view["kind"] = "recent"
     view["rows"] = [{"id": "match", "source_url": url}]
     renderer = Renderer()
-    assert not any("href" in attrs for _, attrs in VisibleHTML(renderer.template(view)).tags)
+    assert all(attrs.get("href") != url for _, attrs in VisibleHTML(renderer.template(view)).tags)
     assert url not in renderer.text(view)
-    assert "数据来源：暂无" in renderer.text(view)
+    assert "BATrace：" not in renderer.text(view)
 
 
 def test_safe_http_links_are_escaped_not_loaded(view):
     renderer = Renderer()
     html = renderer.template(view)
     parsed = VisibleHTML(html)
-    assert ("a", {"href": view["source_url"], "rel": "noreferrer noopener"}) in parsed.tags
-    assert "&amp;n=8" in html
-    assert not any(tag in {"img", "iframe", "script", "link"} for tag, _ in parsed.tags)
+    assert any(attrs.get("href") == "https://github.com/timeance/astrbot_plugin_BA_stats" for _, attrs in parsed.tags)
+    assert view["source_url"] in renderer.text(view)
+    assert not any(tag in {"iframe", "script", "link"} for tag, _ in parsed.tags)
+    assert all(attrs["src"].startswith("data:") for tag, attrs in parsed.tags if tag == "img")
     assert "@import" not in html and "url(" not in html
 
 
@@ -152,14 +152,12 @@ def test_real_zero_and_unknown_stay_distinct(view):
         "duration_seconds": 0, "elo_delta": 0,
     }])
     text = Renderer().text(view)
-    assert "摧毁单位：0 个" in text
-    assert "损失单位：暂无" in text
-    assert "摧毁价值：0.00" in text
-    assert "损失价值：暂无" in text
-    assert "价值交换比：暂无" in text
+    assert "击杀 / 阵亡 0 / 暂无" in text
+    assert "摧毁 / 损失 0.00 / 暂无" in text
+    assert "分值 K/D 暂无" in text
     assert "胜负暂无" in text
-    assert "时长：0分00秒" in text
-    assert "ELO 变化：+0.00" in text
+    assert "0分00秒" in text
+    assert "ELO +0.00" in text
 
 
 def test_exchange_values_are_separate_and_not_recalculated(view):
@@ -170,8 +168,7 @@ def test_exchange_values_are_separate_and_not_recalculated(view):
     renderer = Renderer()
     html_text = compact(VisibleHTML(renderer.template(view)).text)
     text = renderer.text(view)
-    for expected in ["摧毁单位：8 个", "损失单位：2 个", "单位交换比：4.00",
-                     "摧毁价值：2500.50", "损失价值：2000.75", "价值交换比：1.25"]:
+    for expected in ["击杀 / 阵亡 8 / 2", "摧毁 / 损失 2500.50 / 2000.75", "分值 K/D 1.25"]:
         assert expected in text
         assert compact(expected.replace("：", "")) in html_text
 
@@ -182,10 +179,11 @@ def test_stale_and_absent_timestamps_are_visible(view):
     for output in [renderer.text(view), VisibleHTML(renderer.template(view)).text]:
         assert "旧缓存" in output
         assert "抓取时间：暂无" in compact(output)
-        assert "来源更新：暂无" in compact(output)
+        assert "来源更新" not in output
 
 
 def test_timezone_aware_datetime_conversion(view):
+    view["stale"] = True
     view["fetched_at"] = datetime(2026, 11, 17, 2, 30, tzinfo=timezone.utc)
     assert "2026-11-16 21:30 EST" in Renderer(timezone="America/New_York").text(view)
 
@@ -254,3 +252,60 @@ def test_unknown_theme_and_kind_are_configuration_errors():
         Renderer(theme="other")
     with pytest.raises(ValueError):
         Renderer().template({"kind": "other"})
+
+
+def test_fresh_report_omits_empty_sections_and_repeated_provenance(view):
+    renderer = Renderer()
+    for output in (renderer.text(view), VisibleHTML(renderer.template(view)).text):
+        assert "常用单位" not in output
+        assert "抓取时间" not in output and "来源更新" not in output
+        assert output.count(view["source_url"]) <= 1
+
+
+def test_analysis_units_maps_and_categories_share_values(view):
+    view.update(analysis_scope="分析样本 100 场", categories=[{"name": "固定翼", "percentage": 31}],
+                common_units=[{"name": "Tu-95", "count": 72, "damage": 11683, "roi": 1.62}],
+                map_stats=[{"name": "Coast", "count": 8, "win_rate": 50}])
+    renderer = Renderer()
+    for output in (renderer.text(view), VisibleHTML(renderer.template(view)).text):
+        for value in ("分析样本 100 场", "固定翼", "31.00%", "Tu-95", "72", "11683.00", "1.62", "Coast", "50.00%"):
+            assert compact(value) in compact(output)
+
+
+def test_recent_score_precedes_match_and_has_color_without_title(view):
+    view.update(kind="recent", rows=[{"id":"42", "map_name":"Coast", "score":8.6, "score_band":"high"}])
+    renderer = Renderer()
+    html = renderer.template(view)
+    assert 'class="score high"' in html
+    text = renderer.text(view)
+    assert text.index("评分 8.6") < text.index("Coast") < text.index("#42")
+    assert "龙蛆" not in text and "称号" not in text
+
+
+def test_match_retains_known_target_result_and_fractional_resource_values(view):
+    view.update(kind="match", match={"id": "42", "target_outcome": "loss"}, teams=[
+        {"name": "A 队", "players": [{"id": view["player"]["id"], "name": "查询玩家",
+                                      "objectives": 3, "spawned_value": 1234.5, "supply": 12.5}]},
+    ])
+    renderer = Renderer()
+    for output in (renderer.text(view), VisibleHTML(renderer.template(view)).text):
+        for value in ("失利", "1234.50", "12.50", "占点"):
+            assert value in output
+
+
+def test_match_sections_and_footer_are_shared_across_cards(view):
+    view.update(kind="match", match={"id":"42"}, prediction={"a":64,"b":36}, teams=[
+        {"name":"A 队", "metrics":[{"label":"击杀", "value":234,"format":"integer"}],
+         "composition":[{"name":"步兵", "percentage":60}], "players":[{"id":"a","name":"甲"}]},
+        {"name":"B 队", "metrics":[{"label":"击杀", "value":227,"format":"integer"}],
+         "composition":[{"name":"装甲", "percentage":40}], "players":[{"id":"b","name":"乙"}]},
+    ])
+    renderer = Renderer()
+    html = renderer.template(view)
+    assert html.index("赛前预测") < html.index("双方对比") < html.index("兵种构成") < html.index('class="team"')
+    assert 'class="match-columns"' in html
+    for output in (renderer.text(view), VisibleHTML(html).text):
+        for value in ("64.00%", "36.00%", "234", "227", "步兵", "60.00%", "甲", "乙"):
+            assert value in output
+    assert "timeance/astrbot_plugin_BA_stats" in html and "数据来源 BATracer" in html
+    assert "data:image/png;base64," in html

@@ -375,7 +375,7 @@ async def test_last_validates_real_client_detail_without_skipping_identity_error
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = c.BatraceClient(c.ClientConfig(
-            enabled=True, client_id="synthetic-test-client", base_url="https://example.invalid",
+            enabled=True, base_url="https://example.invalid",
             request_interval=0, retries=0,
         ), storage=h.storage, http_client=http)
         monkeypatch.setattr(client, "player", AsyncMock(return_value=h.result(h.player)))
@@ -433,9 +433,8 @@ async def test_units_use_stable_ids_and_distinct_labels_in_image_and_text(h, the
     renderer = Renderer(theme=theme)
     html, text = renderer.template(view), renderer.text(view)
     for unit in view["common_units"]:
-        assert f"{unit['name']}：{unit['count']} 个" in text
-        assert (f'<span class="unit-name">{escape(unit["name"])}</span>'
-                f'<span class="unit-count">{unit["count"]} 个</span>') in html
+        assert f"{unit['name']} · {unit['count']} 次出场" in text
+        assert f'<td>{escape(unit["name"])}</td><td>{unit["count"]}</td>' in html
     assert "Old Name" not in html + text
     assert "Other player's unit" not in html + text
 
@@ -459,25 +458,31 @@ async def test_recent_view_distinguishes_zero_unknown_and_lossless_ratios(h):
 
 
 async def test_overview_uses_actual_sample_and_known_outcomes_only(h):
+    h.player.analysis = h.m.parse_player({
+        "search": {"players": [{"id": "001", "name": "Synthetic"}]},
+        "analysis": {"matchCount": 30, "trend": {"points": [
+            {"matchId": "0", "won": True}, {"matchId": "1", "won": False}, {"matchId": "2"},
+        ]}},
+    }, "001").analysis
     h.client.recent.return_value = h.result([
-        h.m.Match(str(index), players=[h.m.Participant("001", "S", outcome=outcome)])
-        for index, outcome in enumerate(["win", "loss", "unknown"])
+        h.m.Match(str(index), players=[h.m.Participant("001", "S")])
+        for index in range(3)
     ], stale=True)
     view = (await h.run("stats stb:001")).view
     metrics = {item["label"]: item for item in view["metrics"]}
-    assert metrics["样本场数"]["value"] == 3
-    assert metrics["胜 / 负 / 未知"]["value"] == "1 / 1 / 1"
-    assert metrics["已知结果胜率"]["value"] == 50
-    assert "2 场" in metrics["已知结果胜率"]["note"]
-    assert "实际 3 场" in view["scope"]
-    assert "非完整历史" in view["scope"]
+    assert len(view["rows"]) == 3
+    assert [row["outcome"] for row in view["rows"]] == ["win", "loss", "unknown"]
+    assert metrics["分析样本胜率"]["value"] == 50
+    assert "2 场已知结果" in metrics["分析样本胜率"]["note"]
+    assert view["scope"] == "近期3场"
+    assert view["analysis_scope"] == "分析样本30场 · 与近期样本独立"
     assert view["stale"] is True
 
 
 async def test_service_real_client_pipeline_sorts_and_deduplicates_recent_samples(h, monkeypatch):
     c = h.modules.client
     client = c.BatraceClient(c.ClientConfig(
-        enabled=True, client_id="synthetic-test-client", base_url="https://example.invalid",
+        enabled=True, base_url="https://example.invalid",
         request_interval=0, retries=0,
     ), storage=h.storage)
 
@@ -497,7 +502,7 @@ async def test_service_real_client_pipeline_sorts_and_deduplicates_recent_sample
     try:
         view = (await h.run("recent stb:001 --limit 5")).view
         assert [row["id"] for row in view["rows"]] == ["new", "old"]
-        assert "实际 2 场" in view["scope"]
+        assert view["scope"].startswith("近期2场 · ")
         request.assert_awaited_once_with("/api/players/matches", {"stbid": "001", "limit": 5})
     finally:
         await client.close()

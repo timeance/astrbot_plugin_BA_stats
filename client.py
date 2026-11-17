@@ -1,7 +1,7 @@
 """Independent BATrace adapter with bounded scheduling and persistent caching.
 
 Creating a client never probes the source. All network methods require explicit
-access enablement and this plugin's own operator-approved client identity.
+access enablement and use the plugin's fixed client identity.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import hashlib
@@ -17,17 +17,18 @@ import json
 import math
 import time
 from typing import Any, Awaitable, Callable, Protocol, TypeVar
-from urllib.parse import urlsplit
 
 import httpx
 
 if __package__:
+    from .settings import valid_https_origin
     from .quota import AdmissionDeferred, GLOBAL_DAILY_LIMIT, QuotaActor, QuotaExceededError, quota_day
     from .models import (
         FetchResult, Match, Participant, Player, canonical_id, parse_match, parse_player,
         parse_recent, parse_search, utc_datetime,
     )
 else:  # Direct module imports for framework-independent tests.
+    from settings import valid_https_origin
     from quota import AdmissionDeferred, GLOBAL_DAILY_LIMIT, QuotaActor, QuotaExceededError, quota_day
     from models import (
         FetchResult, Match, Participant, Player, canonical_id, parse_match, parse_player,
@@ -35,6 +36,7 @@ else:  # Direct module imports for framework-independent tests.
     )
 
 T = TypeVar("T")
+CLIENT_ID = "Astrbot_BA_Stats"
 
 
 class CacheStorage(Protocol):
@@ -52,8 +54,6 @@ class CacheStorage(Protocol):
 class ClientConfig:
     enabled: bool = False
     base_url: str = "https://bot.batrace.top"
-    client_id: str = ""
-    api_token: str = field(default="", repr=False)
     request_interval: float = 1.0
     concurrency: int = 2
     queue_size: int = 20
@@ -176,37 +176,26 @@ class BatraceClient:
         self._cache_hits = 0
         self._stale_hits = 0
         self._last_error: str | None = None
-        # Includes origin AND identity, so a different deployment/credential can
-        # never accidentally read another source's cached identity response.
-        source = json.dumps([c.base_url.rstrip("/"), c.client_id, c.api_token])
+        self.diagnostics: Callable[..., None] | None = None
+        # Cache identity follows the source and the fixed plugin client.
+        source = json.dumps([c.base_url.rstrip("/"), CLIENT_ID])
         self._namespace = "batrace:v1:" + hashlib.sha256(source.encode()).hexdigest()[:24]
 
     @property
     def namespace(self) -> str:
-        """Stable binding identity: credential rotation must not change it."""
+        """Binding identity follows the source, independently of cached responses."""
         origin = self.config.base_url.rstrip("/")
         return "batrace:" + hashlib.sha256(origin.encode()).hexdigest()[:16]
 
     @property
     def configured(self) -> bool:
-        c = self.config
-        if not c.enabled or not c.client_id.strip() or "ba-dragon" in c.client_id.casefold():
-            return False
-        if any(ch in c.client_id + c.api_token for ch in "\r\n"):
-            return False
-        try:
-            u = urlsplit(c.base_url)
-            _ = u.port
-            return bool(u.scheme == "https" and u.hostname and not u.username and not u.password
-                        and not u.query and not u.fragment and u.path in {"", "/"})
-        except ValueError:
-            return False
+        return self.config.enabled and valid_https_origin(self.config.base_url)
 
     def _check_ready(self) -> None:
         if self._closed:
             raise ClientClosedError("数据源客户端已关闭，请稍后重试。")
         if not self.configured:
-            raise NotConfiguredError("数据源接入未配置：需开启在线查询并填写本插件独立的获准客户端标识。")
+            raise NotConfiguredError("数据源接入未配置：请开启在线查询，并检查 API 地址是否为有效的 HTTPS 地址。")
 
     def status(self) -> dict[str, Any]:
         """Safe admin diagnostics: never return token, header, query or URL."""
@@ -381,9 +370,7 @@ class BatraceClient:
                 if isinstance(data, Match):
                     # A structural complete flag is insufficient for a just-ended
                     # match: keep it short until at least five minutes after end.
-                    end = None
-                    if data.started_at is not None and data.duration_seconds is not None:
-                        end = data.started_at.timestamp() + data.duration_seconds
+                    end = data.ended_at.timestamp() if data.ended_at is not None else None
                     if not data.complete or end is None or time.time() - end < 300:
                         ttl = 60
                 if self._storage is not None:
@@ -460,11 +447,7 @@ class BatraceClient:
         if self._http is None:
             self._http = httpx.AsyncClient()
         c = self.config
-        headers = {"Accept": "application/json", "User-Agent": "astrbot-plugin-ba-stats", "X-Client": c.client_id}
-        if c.api_token:
-            # Optional Bearer scheme is a deployment choice, NOT a verified
-            # BATrace requirement; configure only if operator-approved.
-            headers["Authorization"] = "Bearer " + c.api_token
+        headers = {"Accept": "application/json", "User-Agent": "astrbot-plugin-ba-stats", "X-Client": CLIENT_ID}
         for attempt in range(c.retries + 1):
             await self._check_daily_quota()
             async with self._start_lock:
@@ -482,19 +465,28 @@ class BatraceClient:
             # No suspension between releasing the gate and handing off to HTTP;
             # only request starts are serialized, never response processing.
             delay = 30.0
+            started = time.monotonic()
+            if self.diagnostics:
+                self.diagnostics("http_start", route=path, attempt=attempt + 1)
             try:
                 response = await self._http.get(
                     c.base_url.rstrip("/") + path, params=params, headers=headers,
                     timeout=c.request_timeout, follow_redirects=False,
                 )
             except httpx.TimeoutException:
+                if self.diagnostics:
+                    self.diagnostics("http_error", route=path, error="timeout", duration_ms=round((time.monotonic() - started) * 1000))
                 error: ClientError = RequestTimeoutError("连接或读取数据源超时，请稍后重试。")
             except httpx.RequestError:
+                if self.diagnostics:
+                    self.diagnostics("http_error", route=path, error="connection", duration_ms=round((time.monotonic() - started) * 1000))
                 error = UpstreamError("暂时无法连接到数据源，请稍后重试。")
             else:
                 status = response.status_code
+                if self.diagnostics:
+                    self.diagnostics("http_response", route=path, status=status, duration_ms=round((time.monotonic() - started) * 1000))
                 if status in {401, 403}:
-                    raise AuthenticationError("数据源鉴权失败或拒绝访问，请管理员检查客户端标识与令牌配置。")
+                    raise AuthenticationError("BATrace 拒绝了本次访问，请稍后重试或联系平台核实。")
                 content_type = response.headers.get("content-type", "").split(";")[0].lower()
                 is_json = content_type == "application/json" or content_type.endswith("+json")
                 if not is_json and any(mark in response.text for mark in (
