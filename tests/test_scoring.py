@@ -139,9 +139,50 @@ def test_missing_teammate_financials_or_opponent_elo_do_not_make_up_a_score():
     {"highlightUnits": [{"unitId": 13, "totalCost": 2000}]},
     {"highlightUnits": [{"unitId": 13, "categoryType": 2}]},
 ])
-def test_incomplete_career_spend_is_unknown_not_percentage_substitution(analysis):
+def test_incomplete_career_spend_uses_the_prior_without_substituting_percentages(analysis):
     match = normalized()
-    assert recent_score(match, match.players[0], analysis) is None
+    assert recent_score(match, match.players[0], analysis) == recent_score(match, match.players[0], {}) == 9.9
+
+
+def test_partial_role_observations_keep_the_usable_spend():
+    match = normalized()
+    partial = deepcopy(SUPPORT_ANALYSIS)
+    partial["highlightUnits"].extend([
+        {"unitId": 13, "totalCost": 99999}, {"unitId": 57, "categoryType": 1},
+    ])
+    partial["categoryPreferences"].append({"categoryKey": "vehicles", "percentage": 100})
+    assert recent_score(match, match.players[0], partial) == 8.6
+
+
+def test_explicit_loss_overrides_positive_elo_and_conflict_blocks_the_fallback():
+    match = normalized()
+    me = match.players[0]
+    loss = {"matchId": match.id, "won": False}
+    analysis = {"trend": {"points": [loss, {"matchId": match.id}, loss]}}
+    assert recent_score(match, me, analysis) == 9.5
+    expected = profile_rating([match], me.player_id, analysis)
+    assert expected["sample_size"] == 1
+    assert expected["win_rate_sample"] == {"value": 0, "sample_size": 1, "wins": 0, "losses": 1}
+    for other in match.players[1:]:
+        other.elo = other.elo_delta = None
+    assert recent_score(match, me, analysis) == 9.5
+    assert profile_rating([match], me.player_id, analysis) == expected
+    analysis["trend"]["points"].append({**loss, "won": True})
+    assert recent_score(match, me, analysis) is None
+    blocked = profile_rating([match], me.player_id, analysis)
+    assert blocked["sample_size"] == blocked["win_rate_sample"]["sample_size"] == 0
+
+
+@pytest.mark.parametrize("post_elo", [1900, 1900.005, None])
+def test_explicit_win_does_not_admit_a_match_without_a_valid_elo_change(post_elo):
+    match = normalized()
+    me = match.players[0]
+    me.elo = post_elo
+    analysis = {"trend": {"points": [{"matchId": match.id, "won": True}]}}
+    assert recent_score(match, me, analysis) is None
+    profile = profile_rating([match], me.player_id, analysis)
+    assert profile["score"] is None and profile["sample_size"] == 0
+    assert profile["win_rate_sample"] == {"value": 100, "sample_size": 1, "wins": 1, "losses": 0}
 
 
 def test_unrated_spectator_foreign_participant_and_missing_opposition_have_no_score():
@@ -193,6 +234,8 @@ def test_prediction_accepts_old_rating_without_new_rating_and_ignores_spectators
     match.players.insert(0, Participant("observer", "Observer", team="2"))
     match.players.reverse()
     assert match_prediction(match) == expected
+    match.players = [p for p in match.players if p.player_id != "d"]
+    assert match_prediction(match) is None  # Both sides exist, but one roster is short.
     match.players = [p for p in match.players if p.team != "1"]
     assert match_prediction(match) is None
     assert match_prediction(Match("empty")) is None
@@ -290,13 +333,14 @@ def test_profile_matches_pinned_compute_dragon_score(indices, analysis, expected
     raws = profile_sample()
     matches = [parse_match({"matchInfo": raws[i]}, str(i)) for i in indices]
     before = deepcopy(matches)
-    profile = profile_rating(matches, "a", analysis, 0)
+    profile = profile_rating(matches, "a", analysis)
     score, title, tone, parts = expected
     assert profile == {
         "score": score, "title": title, "tone": tone, "sample_size": len(matches),
+        "win_rate_sample": {"value": None, "sample_size": 0, "wins": 0, "losses": 0},
         "dimensions": [dict(key=key, label=label, value=value) for key, label, value in zip(
             ("kd", "contrib", "obj", "outcome", "win_rate"),
-            ("分值 K/D", "摧毁贡献", "占点贡献", "胜负预期", "实际胜率"), [*parts, 0])],
+            ("交换效率", "摧毁贡献", "夺点表现", "赛果超预期", "实际胜率"), [*parts, None])],
     }
     assert matches == before
 
@@ -313,9 +357,20 @@ def test_profile_caps_newest_valid_rows_after_normalizing_match_order():
         }})
     matches = parse_recent({"matches": raws[::2] + raws[1::2]})
     assert [m.id for m in matches] == [str(i) for i in range(21, -1, -1)]
-    profile = profile_rating(matches, "a", {}, None)
+    profile = profile_rating(matches, "a", {})
     assert (profile["score"], profile["title"], profile["sample_size"]) == (10, "真龙", 20)
     assert [d["value"] for d in profile["dimensions"]] == [99, 99, 83, 95, None]
+
+
+def test_win_rate_uses_newest_twenty_distinct_matches_independently_of_score():
+    matches = [Match(str(i), players=[Participant("a", "A", team="0")]) for i in range(21)]
+    analysis = {"trend": {"points": [
+        {"matchId": 0, "won": False}, {"matchId": 19, "won": True}, {"matchId": 20, "won": True},
+    ]}}
+    profile = profile_rating([matches[0], *matches], "a", analysis)
+    assert profile["score"] is None and profile["sample_size"] == 0
+    assert profile["dimensions"][-1]["value"] == 50
+    assert profile["win_rate_sample"] == {"value": 50, "sample_size": 2, "wins": 1, "losses": 1}
 
 
 def test_missing_objectives_omit_only_unobserved_parts_and_never_supply_a_win():
@@ -323,37 +378,37 @@ def test_missing_objectives_omit_only_unobserved_parts_and_never_supply_a_win():
     short["Data"]["c"].pop("ObjectivesCaptured")
     latest = parse_match({"matchInfo": short}, "latest")
     earlier = parse_match({"matchInfo": afk}, "earlier")
-    single = profile_rating([latest], "a", FRONT_ANALYSIS, None)
+    single = profile_rating([latest], "a", FRONT_ANALYSIS)
     assert single["score"] == 7.8
     assert [d["value"] for d in single["dimensions"]] == [100, 98, None, 95, None]
     # Missing objectives for an inactive ally do not affect the active-team comparison.
-    earlier_obj = profile_rating([earlier], "a", FRONT_ANALYSIS, None)["dimensions"][2]["value"]
+    earlier_obj = profile_rating([earlier], "a", FRONT_ANALYSIS)["dimensions"][2]["value"]
     assert earlier_obj is not None
-    both = profile_rating([latest, earlier], "a", FRONT_ANALYSIS, None)
+    both = profile_rating([latest, earlier], "a", FRONT_ANALYSIS)
     assert both["sample_size"] == 2 and both["dimensions"][2]["value"] == earlier_obj
-    empty = profile_rating([latest], "absent", {}, 100)
+    empty = profile_rating([latest], "absent", {"trend": {"points": [{"matchId": "latest", "won": True}]}})
     assert (empty["sample_size"], empty["score"], empty["title"], empty["tone"]) == (0, None, None, None)
-    assert [d["value"] for d in empty["dimensions"]] == [None, None, None, None, 100]
+    assert [d["value"] for d in empty["dimensions"]] == [None] * 5
 
 
 def test_profile_distinguishes_explicit_zero_from_unknown_values():
     raw = raw_match()
     for player in raw["Data"].values():
         player.update(DestructionScore=0, LossesScore=0, ObjectivesCaptured=0)
-    zero = profile_rating([normalized(raw)], "a", {}, 0)
+    zero = profile_rating([normalized(raw)], "a", {})
     # The TS oracle still scores the explicit zeros and returns an objective percentile.
     assert (zero["score"], zero["title"], zero["sample_size"]) == (7.2, "泯然众人", 1)
-    assert [d["value"] for d in zero["dimensions"]] == [61, 58, 54, 86, 0]
+    assert [d["value"] for d in zero["dimensions"]] == [61, 58, 54, 86, None]
     raw["Data"]["a"].pop("DestructionScore")  # Protobuf omits zero counters.
-    assert profile_rating([normalized(raw)], "a", {}, 0) == zero
+    assert profile_rating([normalized(raw)], "a", {}) == zero
     raw["Data"]["a"].pop("ObjectivesCaptured")
-    missing = profile_rating([normalized(raw)], "a", {}, None)
+    missing = profile_rating([normalized(raw)], "a", {})
     assert missing["score"] == zero["score"]
     assert [d["value"] for d in missing["dimensions"]] == [61, 58, None, 86, None]
     raw["Data"]["a"]["DestructionScore"] = None
-    incomplete = profile_rating([normalized(raw)], "a", {}, 0)
+    incomplete = profile_rating([normalized(raw)], "a", {})
     assert incomplete["score"] is None and incomplete["sample_size"] == 0
-    assert [d["value"] for d in incomplete["dimensions"]] == [None, None, None, None, 0]
+    assert [d["value"] for d in incomplete["dimensions"]] == [None] * 5
 
 
 def test_bundled_model_has_pinned_source_and_complete_mit_notice_without_match_awards():

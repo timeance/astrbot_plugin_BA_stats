@@ -17,7 +17,7 @@
 
 `scoring.py` 将固定提交中的 `src/shared/dragon/score.ts`、`roles.ts`、`model.ts` 相关逻辑移植为 Python；`assets/scoring-model.json` 从同一提交的 `src/shared/dragon/model.json` 提取评分参数，单位表仅保留角色和基础价格。模型内的 `source` 记录仓库、提交、来源文件和完整 MIT 文本。
 
-玩家概览使用 `computeDragonScore` 的 Kalman 聚合、玩家分位表、分档和四个表现分项；分档称号取自 `src/renderer/src/features/players/PlayerDetail.tsx`。第五项「实际胜率」由插件服务根据明确的 `won` 计算并传入评分模块。近期战绩保持逐局评分。未移植单局奖项、时间线或实力 ELO；这些模型分数不代表官方评价。
+玩家概览使用 `computeDragonScore` 的 Kalman 聚合、玩家分位表、分档和四个表现分项；分档称号取自 `src/renderer/src/features/players/PlayerDetail.tsx`。插件优先采用可核对的明确赛果计算赛果表现。第五项「实际胜率」仅使用明确的 `won`，按对局去重；没有套用上游综合评分的分位表。近期战绩保持逐局评分。未移植单局奖项、时间线或实力 ELO；这些模型分数不代表官方评价。
 
 [BA_DRAGON_LICENSE.txt](BA_DRAGON_LICENSE.txt) 和模型的 `source.licenseText` 均原样保留固定提交的 `LICENSE`，包括 `Copyright (c) 2026 AlexanderHYu` 及 `Copyright (c) 2025-2026 Zola (Zawinzala)` 与原文件的沿用部分说明。分发这些移植代码或模型时，安装包、源码和 Gemini 文案包均应保留完整上游版权及 MIT 许可；文案润色不修改该文本。
 

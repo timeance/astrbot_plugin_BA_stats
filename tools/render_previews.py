@@ -25,7 +25,7 @@ import tempfile
 sys.dont_write_bytecode = True
 REPOSITORY = Path(__file__).resolve().parents[1]
 SESSION = REPOSITORY.parent
-OUTPUT = SESSION / "tmp" / "overview-v015" / "previews"
+OUTPUT = SESSION / "tmp" / "report-readability" / "previews"
 sys.path.insert(0, str(REPOSITORY))
 
 from render import Renderer
@@ -44,18 +44,20 @@ def sample_views() -> dict[str, dict]:
         "synthetic": True,
     }
     overview = deepcopy(base)
+    overview["player"]["analysis"] = {"matchCount": 83}
     overview.update(
         kind="overview",
+        scope="近期12场 · 11-06—11-17",
         metrics=[
             {"label": "ELO", "value": 1854.02},
             {"label": "近期分值 K/D", "value": 1.42},
-            {"label": "分析样本胜率", "value": 40, "format": "percent"},
-            {"label": "单局伤害交换比", "value": 1.3},
+            {"label": "分析样本胜率", "value": 40, "format": "percent", "wins": 20, "sample_size": 50},
+            {"label": "近期伤害交换比", "value": 1.3, "note": "8/10 场有数据"},
         ],
         profile_rating={"score": 5.8, "title": "泯然众人", "tone": "medium", "sample_size": 4,
-                        "dimensions": [{"key": key, "label": label, "value": value} for key, label, value in
-                                       (("kd", "分值 K/D", 37), ("contrib", "摧毁贡献", 59), ("obj", "占点贡献", 30),
-                                        ("outcome", "胜负预期", 51), ("win_rate", "实际胜率", 60))]},
+                        "win_rate_sample": {"value": 60, "wins": 6, "losses": 4, "sample_size": 10, "window_size": 12},
+                        "dimensions": [{"key": key, "value": value} for key, value in
+                                       (("kd", 37), ("contrib", 59), ("obj", 30), ("outcome", 51), ("win_rate", 60))]},
         common_units=[{"name": "Tu-95", "count": 72, "damage": 11682.87, "roi": 1.62},
                       {"name": "Mi-8AMTSh-VN Sapsan", "count": 165, "damage": 7074.14, "roi": .37}],
         style_scope="近83场风格", categories=[{"name": name, "percentage": value} for name, value in
@@ -85,17 +87,17 @@ def sample_views() -> dict[str, dict]:
                "started_at": "2026-11-17T02:20:00Z", "duration_seconds": 2700, "winner": "A 队", "target_outcome": "win"},
         prediction={"a": 50, "b": 50},
         teams=[
-            {"name": name, "outcome": "win" if side == 0 else "loss",
+            {"id": str(side), "name": name, "outcome": "win" if side == 0 else "loss",
              "metrics": [{"label": label, "value": values[side], "format": "decimal" if label == "赛后平均 ELO" else "integer"}
                          for label, values in [("摧毁分", (32960, 31000)), ("损失分", (31000, 32960)),
                                                ("赛后平均 ELO", (1833.25, 1816.75)), ("击杀", (234, 227)), ("阵亡", (227, 234)),
-                                               ("伤害", (4983, 6480)), ("出兵花费", (40200, 43450)),
+                                               ("伤害", (4983, 6480)), ("出动价值", (40200, 43450)),
                                                ("占点", (15, 16)), ("补给消耗", (62685, 82319))]],
              "composition": [{"name": role, "percentage": percentages[side]}
                              for role, percentages in [("装甲", (20, 17)), ("步兵", (13, 13)), ("侦察", (10, 8)),
                                                         ("炮兵", (5, 7)), ("防空", (17, 19)), ("直升机", (10, 15)),
                                                         ("固定翼", (24, 20)), ("后勤/运输", (1, 1))]],
-             "composition_note":"合成样本", "players": [
+             "players": [
                 {"id": base["player"]["id"] if side == 0 and index == 1 else f"sample-{side}-{index}",
                  "name": match["player"]["name"] if side == 0 and index == 1 else f"合成队员 {side + 1}-{index + 1}",
                  "elo_before": 1800 + index * 12.5,
@@ -134,10 +136,13 @@ def sample_views() -> dict[str, dict]:
                        source_url=None, source_updated_at=None, stale=True, scope="已取得样本 · 覆盖范围暂无")
         if kind == "overview":
             missing["metrics"] = [dict(metric, value=None) for metric in overview["metrics"]]
+            missing["metrics"][2].update(wins=0, sample_size=0)
             missing["profile_rating"] = deepcopy(overview["profile_rating"])
-            missing["profile_rating"].update(score=None, title=None, tone=None, sample_size=0)
+            missing["profile_rating"].update(score=None, title=None, tone=None, sample_size=0,
+                                             win_rate_sample={"value": 0, "wins": 0, "losses": 5,
+                                                              "sample_size": 5, "window_size": 8})
             for axis in missing["profile_rating"]["dimensions"]:
-                axis["value"] = 0 if axis["key"] == "win_rate" else None
+                axis["value"] = 0 if axis["key"] in ("kd", "win_rate") else None
             missing["style_scope"] = "近0场风格"
             missing["common_units"] = [{"name": "合成未完整单位", "count": 0, "roi": 0}]
             missing["map_stats"] = [{"name": "合成未完整地图", "count": 2}]
@@ -148,6 +153,27 @@ def sample_views() -> dict[str, dict]:
             missing["teams"] = [{"name": "合成未完整分队", "players": [{"id": "sample-player", "name": None}]},
                                 {"name": "合成空分队", "players": []}]
         samples[f"{kind}-missing"] = missing
+    small = deepcopy(overview)
+    small["profile_rating"]["win_rate_sample"] = {"value": 100, "wins": 1, "losses": 0,
+                                                   "sample_size": 1, "window_size": 12}
+    samples["overview-small-sample"] = small
+    multi = deepcopy(recent)
+    multi["scope"] = "近期7场"
+    multi["rows"] += [dict(recent["rows"][i], id=f"sample-match-{i + 6:03d}") for i in range(2)]
+    samples["recent-multi"] = multi
+    partial = deepcopy(match)
+    partial["match"].update(roster_complete=False, target_outcome="unknown")
+    partial["scope"] = "单局 · 详情收录 9 人 · 近期名单 11 人"
+    partial["teams"][0]["players"].pop()
+    partial["teams"][1]["players"].pop()
+    partial["teams"][1].update(composition=[], composition_note="1 人缺单位数据，构成暂无")
+    partial["teams"][0]["metrics"][5].update(value=3062, complete=False, note="3/4 人有数据")
+    partial["teams"].append({"id": "4", "name": "观战", "players": [{"name": "合成观战者"}]})
+    samples["match-partial"] = partial
+    direct = deepcopy(match)
+    del direct["player"]
+    direct["match"].pop("target_outcome")
+    samples["match-direct"] = direct
     return samples
 
 
@@ -184,10 +210,11 @@ async def screenshots(artifacts: list[dict]) -> list[dict]:
                             const bounds = report.getBoundingClientRect();
                             const numbers = report.querySelectorAll(
                                 '.metric-number, .report-table td:not(:first-child), .score, .style-list b, ' +
-                                '.compact-line b, .recent-metrics dd, .row-meta .numeric, .summary-metrics dd, ' +
+                                '.compact-line b, .row-meta b, .row-elo, .summary-metrics dd, .roster .participant td, ' +
                                 '.comparison-values b, .prediction-values b'
                             );
                             const overflowingNumbers = [...numbers].filter(el => {
+                                if (!el.getClientRects().length) return false;
                                 if (el.clientWidth && el.scrollWidth > el.clientWidth + 1) return true;
                                 const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
                                 for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -210,13 +237,20 @@ async def screenshots(artifacts: list[dict]) -> list[dict]:
                                     return box.left < frame.left || box.right > frame.right ||
                                         box.top < frame.top || box.bottom > frame.bottom;
                                 }).map(el => el.textContent.trim());
+                            const roster = report.querySelector('.roster');
+                            const rosterColumns = [...(roster?.querySelectorAll('thead th') ?? [])]
+                                .filter(el => el.getClientRects().length).map(el => el.textContent.trim());
+                            const badRoster = roster && (roster.tHead.rows.length !== 1 ||
+                                rosterColumns.length !== (innerWidth <= 680 ? 3 : 5) ||
+                                roster.querySelectorAll('.participant-detail').length !==
+                                roster.querySelectorAll('.participant.target').length);
                             return {
                                 width: innerWidth, documentWidth: document.documentElement.scrollWidth,
                                 height: document.documentElement.scrollHeight,
                                 reportWidth: bounds.width, reportHeight: bounds.height,
                                 synthetic: report.querySelector('.synthetic')?.textContent,
                                 font: getComputedStyle(document.body).fontFamily,
-                                overflowingNumbers, clippedRadarLabels
+                                overflowingNumbers, clippedRadarLabels, rosterColumns, badRoster
                             };
                         }""")
                         name = f"{item['name']}-{width}.png"
@@ -225,8 +259,9 @@ async def screenshots(artifacts: list[dict]) -> list[dict]:
                                  "external_requests": list(requests),
                                  "passed": dimensions["reportWidth"] == width and dimensions["documentWidth"] == width
                                            and not requests and not dimensions["overflowingNumbers"]
-                                           and not dimensions["clippedRadarLabels"] and bool(dimensions["synthetic"])}
-                        if width != PHONE_WIDTH and item["kind"] in {"overview", "recent"}:
+                                           and not dimensions["clippedRadarLabels"] and not dimensions["badRoster"]
+                                           and bool(dimensions["synthetic"])}
+                        if width != PHONE_WIDTH:
                             chat_image = f"{item['name']}-{width}-chat-{PHONE_WIDTH}.png"
                             with Image.open(OUTPUT / name) as image:
                                 height = round(image.height * PHONE_WIDTH / image.width)

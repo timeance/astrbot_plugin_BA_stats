@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import exchange, outcome %}
+{% from "_macros.html" import comparison, outcome %}
 {% block identity %}
   <h1>{{ view.match.map_name }}</h1>
   <p class="identity-meta">对局 ID：{{ view.match.id }}</p>
@@ -7,66 +7,58 @@
   <p class="identity-meta">{{ view.match.started_at }} · {{ view.match.duration }}{% if view.match.mode != '暂无' %} · {{ view.match.mode }}{% endif %}{% if view.match.winner != '暂无' %} · 胜方 {{ view.match.winner }}{% endif %}</p>
 {% endblock %}
 {% block content %}
-
 <section class="match-overview">
-<div class="prediction">
-  <h2>赛前预测</h2>
-  {% if view.prediction %}<div class="prediction-values"><b>A 队 {{ view.prediction.a }}%</b><b>B 队 {{ view.prediction.b }}%</b></div>
-  <div class="prediction-bar"><i style="width:{{ view.prediction.width }}%"></i></div>
-  <p class="metric-note">按赛前 ELO 估算</p>{% else %}<p>暂无完整赛前 ELO</p>{% endif %}
-</div>
-<div class="team-summaries">
-  {% for team in view.teams %}
-  <section class="team-summary side-{{ team.side }}">
-    <div class="summary-heading"><h2>{{ team.name }}<span class="team-size">{{ team.players | length }} 人</span></h2>{{ outcome(team.outcome) }}</div>
-    <dl class="summary-metrics">{% for metric in team.summary %}<div><dt>{{ metric.label }}</dt><dd>{{ metric.display }}</dd>{% if metric.note %}<small class="metric-note">{{ metric.note }}</small>{% endif %}</div>{% endfor %}</dl>
-  </section>
-  {% endfor %}
-</div>
+  <div class="prediction">
+    <h2>赛前预测</h2>
+    {% if view.prediction %}
+    <div class="prediction-values"><b>A 队 {{ view.prediction.a }}%</b><b>B 队 {{ view.prediction.b }}%</b></div>
+    <div class="prediction-bar" aria-hidden="true"><i style="width:{{ view.prediction.width }}%"></i></div>
+    {% endif %}
+    <p class="metric-note">{{ view.prediction_note }}</p>
+  </div>
+  {% if view.formal_teams %}
+  <div class="team-summaries">
+    {% for team in view.formal_teams %}
+    <section class="team-summary side-{{ team.side }}">
+      <div class="summary-heading"><h2>{{ team.name }}<span class="team-size">{{ team.players | length }} 人</span></h2>{{ outcome(team.outcome) }}</div>
+      <dl class="summary-metrics">{% for metric in team.summary %}<div><dt>{{ metric.label }}</dt><dd>{{ metric.display }}</dd>{% if metric.note %}<small class="metric-note">{{ metric.note }}</small>{% endif %}</div>{% endfor %}</dl>
+    </section>
+    {% endfor %}
+  </div>
+  {% endif %}
 </section>
 <div class="match-columns">
-  <section><h2 class="section-heading">兵种构成</h2><p class="metric-note">按基础花费估算</p>
-    {% if view.composition_rows %}
-    <p class="metric-note composition-key">左 {{ view.teams[0].name }}（深）· 右 {{ view.teams[1].name }}（浅）</p>
-    <dl class="comparison-list composition-list">
-    {% for row in view.composition_rows %}<div class="comparison-row composition-row"><dt>{{ row.label }}</dt><dd>
-      <div class="comparison-values"><b>{{ row['values'][0] }}</b><b>{{ row['values'][1] }}</b></div>
-      <div class="comparison-track{% if row.width is none %} no-comparison{% endif %}" role="img" aria-label="{{ row.label }}：{{ view.teams[0].name }} {{ row['values'][0] }}，{{ view.teams[1].name }} {{ row['values'][1] }}">
-        {% if row.width is not none %}<i class="segment role-{{ row.role }} role-a" style="width:{{ row.width }}%"></i><i class="segment role-{{ row.role }} role-b" style="width:{{ 100 - row.width }}%"></i>{% endif %}
-      </div>
-    </dd></div>{% endfor %}
-    </dl>
+  <section><h2 class="section-heading">兵种构成</h2><p class="metric-note">按基础出动价值估算</p>
+    {% if view.composition_rows %}{{ comparison(view.composition_rows, true) }}
     {% else %}<p class="scope">暂无完整兵种构成</p>{% endif %}
-    {% for team in view.teams %}{% if team.composition_note %}<p class="metric-note">{{ team.name }}：{{ team.composition_note }}</p>{% endif %}{% endfor %}
+    {% for team in view.formal_teams %}{% if team.composition_note %}<p class="metric-note">{{ team.name }}：{{ team.composition_note }}</p>{% endif %}{% endfor %}
   </section>
   <section><h2 class="section-heading">双方对比</h2>
-    {% if view.comparisons %}
-    <p class="metric-note comparison-key"><span class="side-{{ view.teams[0].side }}">左 {{ view.teams[0].name }}</span><span class="side-{{ view.teams[1].side }}">右 {{ view.teams[1].name }}</span></p>
-    <dl class="comparison-list">
-    {% for row in view.comparisons %}<div class="comparison-row"><dt>{{ row.label }}</dt><dd>
-      <div class="comparison-values"><b class="side-{{ view.teams[0].side }}">{{ row['values'][0] }}</b><b class="side-{{ view.teams[1].side }}">{{ row['values'][1] }}</b></div>
-      <div class="comparison-track{% if row.width is none %} no-comparison{% endif %}" role="img" aria-label="{{ row.label }}：{{ view.teams[0].name }} {{ row['values'][0] }}，{{ view.teams[1].name }} {{ row['values'][1] }}">
-        {% if row.width is not none %}<i class="segment side-{{ view.teams[0].side }}" style="width:{{ row.width }}%"></i><i class="segment side-{{ view.teams[1].side }}" style="width:{{ 100 - row.width }}%"></i>{% endif %}
-      </div>
-      {% if row.notes[0] or row.notes[1] %}<div class="comparison-notes"><small>{{ row.notes[0] }}</small><small>{{ row.notes[1] }}</small></div>{% endif %}
-    </dd></div>{% endfor %}
-    </dl>{% else %}<p class="scope">暂无对比数据</p>{% endif %}
+    {% if view.comparisons %}{{ comparison(view.comparisons) }}{% else %}<p class="scope">暂无对比数据</p>{% endif %}
   </section>
 </div>
-<h2 class="section-heading">队伍玩家</h2>
-{% for team in view.teams %}
-<section class="team">
-  <div class="team-heading"><h2>{{ team.name }}<span class="team-size">{{ team.players | length }} 人</span></h2>{% if team.outcome.key != 'unknown' %}{{ outcome(team.outcome) }}{% endif %}</div>
-  {% if team.players %}
-  <ul class="player-list">
+<h2 class="section-heading" id="roster-heading">队伍玩家</h2>
+{% if view.teams %}
+<table class="roster" aria-labelledby="roster-heading">
+  <thead><tr><th scope="col">玩家</th><th scope="col">ELO</th><th scope="col">分值 K/D</th><th scope="col" class="roster-wide">摧毁 / 损失</th><th scope="col" class="roster-wide">击杀 / 阵亡</th></tr></thead>
+  {% for team in view.teams %}
+  <tbody class="team">
+    <tr class="team-heading side-{{ team.side }}"><th scope="rowgroup" colspan="5">{{ team.name }}<span class="team-size">{{ team.players | length }} 人</span>{% if team.outcome.key != 'unknown' %}{{ outcome(team.outcome) }}{% endif %}</th></tr>
     {% for player in team.players %}
-    <li class="participant{% if player.is_target %} target{% endif %}">
-      <h3>{{ player.name }}{% if player.is_target %}（查询玩家）{% endif %}</h3>
-      <div class="compact-line">{% for metric in player.metrics %}<span>{{ metric.label }} <b>{{ metric.display }}</b></span>{% endfor %}</div>
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}<p class="empty">队员：暂无</p>{% endif %}
-</section>
-{% else %}<p class="empty">分队与玩家：暂无</p>{% endfor %}
+    <tr class="participant{% if player.is_target %} target{% endif %}">
+      <th scope="row">{{ player.name }}{% if player.is_target %}<small class="target-label">查询玩家</small>{% endif %}</th>
+      {% for metric in player.metrics[:4] %}<td{% if loop.index > 2 %} class="roster-wide"{% endif %}>{{ metric.display }}</td>{% endfor %}
+    </tr>
+    {% if player.is_target %}
+    <tr class="participant-detail target{% if not player.metrics[4:] %} narrow-only{% endif %}">
+      <td colspan="5"><div class="compact-line">
+        {% for metric in player.metrics[2:] %}<span{% if loop.index < 3 %} class="narrow-only"{% endif %}>{{ metric.label }} <b>{{ metric.display }}</b>{% if metric.note %}（{{ metric.note }}）{% endif %}</span>{% endfor %}
+      </div></td>
+    </tr>
+    {% endif %}
+    {% else %}<tr><td colspan="5" class="empty">队员：暂无</td></tr>{% endfor %}
+  </tbody>
+  {% endfor %}
+</table>
+{% else %}<p class="empty">分队与玩家：暂无</p>{% endif %}
 {% endblock %}

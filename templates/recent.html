@@ -5,13 +5,17 @@
 <ol class="recent-list">
   {% for row in view.rows %}
   <li class="recent-card">
-    <div class="row-heading"><span class="score {{ row.score_band }}{% if row.score == '暂无' %} is-missing{% endif %}"><small>评分</small>{{ row.score }}</span><h3>{{ row.map_name }}</h3>{{ outcome(row.outcome) }}</div>
-    <div class="row-meta"><span>#{{ row.id }}</span>{% if row.duration != '暂无' %}<span class="numeric">{{ row.duration }}</span>{% endif %}{% if row.elo_delta != '暂无' %}<span class="numeric">ELO {{ row.elo_delta }}</span>{% endif %}</div>
-    <dl class="recent-metrics">
-      {% for metric in row.exchange %}
-      <div><dt>{{ metric.label }}</dt><dd>{% for part in metric.display.split(' / ') %}{% if not loop.first %} {% endif %}<span class="number">{% if not loop.first %}/ {% endif %}{{ part }}</span>{% endfor %}</dd></div>
-      {% endfor %}
-    </dl>
+    <div class="row-heading">
+      <span class="score {{ row.score_band }}{% if row.score == '暂无' %} is-missing{% endif %}"><small>评分</small>{{ row.score }}</span>
+      <h3>{{ row.map_name }}</h3>
+      {{ outcome(row.outcome) }}
+      <span class="row-elo numeric">ELO <b>{{ row.elo_delta }}</b></span>
+    </div>
+    <div class="row-meta">
+      <span>分值 K/D <b>{{ row.kd }}</b></span>
+      <span>时长 <b>{{ row.duration }}</b></span>
+      <span class="row-id">#{{ row.id }}</span>
+    </div>
   </li>
   {% endfor %}
 </ol>

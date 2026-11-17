@@ -16,16 +16,14 @@ from pathlib import Path
 from typing import Literal
 
 try:
-    from .models import Match, Participant
+    from .models import PROFILE_AXES, AnalysisOutcome, Match, Participant, analysis_outcomes, win_rate_sample
 except ImportError:  # Standalone tests use the repository as their import root.
-    from models import Match, Participant
+    from models import PROFILE_AXES, AnalysisOutcome, Match, Participant, analysis_outcomes, win_rate_sample
 
 
 MODEL = json.loads((Path(__file__).parent / "assets" / "scoring-model.json").read_text(encoding="utf-8"))
 ROLE_KEYS = ("armor", "inf", "recon", "arty", "aa", "heli", "jet")
 CAT_KEYS = ("recon", "infantry", "vehicles", "support", "logistic", "helicopters", "aircrafts")
-_PROFILE_AXES = (("kd", "分值 K/D"), ("contrib", "摧毁贡献"), ("obj", "占点贡献"),
-                 ("outcome", "胜负预期"), ("win_rate", "实际胜率"))
 _PROFILE_TIERS = {"dragon": ("真龙", "high"), "solid": ("有龙样", "high"),
                   "average": ("泯然众人", "medium"), "weak": ("有点蛆", "low"), "qu": ("纯蛆", "low")}
 ROLE_NAMES = {"armor": "装甲", "inf": "步兵", "recon": "侦察", "arty": "炮兵",
@@ -62,11 +60,11 @@ def _expect(own: float, opponent: float) -> float:
 def match_prediction(match: Match) -> dict[str, float] | None:
     """A=team '0', B=team '1'; percentages in 0..100, using pre-match ELO.
 
-    Every participant on both teams must have a pre-match observation. No AFK
-    penalty applies to a pre-match prediction. Spectators are excluded.
+    Both teams must have equal, nonempty rosters and every player needs a
+    pre-match observation. No AFK penalty applies; spectators are excluded.
     """
     teams = [[p for p in match.players if p.team == team] for team in ("0", "1")]
-    if any(not team for team in teams):
+    if not teams[0] or len(teams[0]) != len(teams[1]):
         return None
     averages = []
     for team in teams:
@@ -78,20 +76,18 @@ def match_prediction(match: Match) -> dict[str, float] | None:
     return {"a": a, "b": 100 - a}
 
 
-def _career_roles(analysis: Mapping | None) -> dict[str, float] | None:
+def _career_roles(analysis: Mapping | None) -> dict[str, float]:
     """rolesFromCareer, including the upstream prior of 30% category spend."""
     analysis = analysis or {}
-    categories = analysis.get("categoryPreferences", [])
-    highlights = analysis.get("highlightUnits", [])
-    if not isinstance(categories, list) or not isinstance(highlights, list):
-        return None
+    categories = analysis.get("categoryPreferences")
+    highlights = analysis.get("highlightUnits")
     buckets = {}
-    for unit in highlights:
-        if not isinstance(unit, Mapping):
-            return None
+    for unit in highlights if isinstance(highlights, list) else ():
+        if not isinstance(unit, Mapping) or unit.get("unitId") is None:
+            continue
         category, cost = unit.get("categoryType"), unit.get("totalCost")
         if not _nonnegative(category) or int(category) != category or not _nonnegative(cost):
-            return None
+            continue
         if category >= len(CAT_KEYS):
             continue
         bucket = buckets.setdefault(CAT_KEYS[int(category)], {"total": 0.0})
@@ -100,9 +96,9 @@ def _career_roles(analysis: Mapping | None) -> dict[str, float] | None:
         role = entry[0] if entry and entry[0] else "_none"
         bucket[role] = bucket.get(role, 0.0) + cost
     roles = dict.fromkeys(ROLE_KEYS, 0.0)
-    for category in categories:
+    for category in categories if isinstance(categories, list) else ():
         if not isinstance(category, Mapping) or not _nonnegative(category.get("totalCost")):
-            return None
+            continue
         key, spend = str(category.get("categoryKey")), category["totalCost"]
         default = MODEL["catSplit"].get(key, {})
         bucket = buckets.get(key, {})
@@ -148,19 +144,22 @@ def _inactive(match: Match, players: list[Participant]) -> set[str]:
     return result
 
 
-def _match_features(match: Match, me: Participant, trade: tuple[float, float]) -> dict | None:
+def _match_features(match: Match, me: Participant, trade: tuple[float, float],
+                    outcome: AnalysisOutcome | None) -> dict | None:
     """The matchFeatures inputs used by computeDragonScore, with strict gaps."""
     players = [p for p in match.players if p.team in ("0", "1")]
-    if me.team not in ("0", "1") or not players:
+    if me.team not in ("0", "1") or outcome == "conflict":
         return None
     # Financial counters and rating observations cannot be reconstructed from
     # analysis trend points or post-match team averages.
     if any(not _nonnegative(p.destroyed_value) or not _nonnegative(p.lost_value)
-           or _old_rating(p) is None or not _finite(p.elo) for p in players):
+           or _old_rating(p) is None for p in players):
         return None
     old = _old_rating(me)
-    if old is None or not _finite(me.elo) or abs(me.elo - old) < 0.01:
+    # Keep the rated-match gate independent of the source of S.
+    if not _finite(me.elo) or abs(me.elo - old) < 0.01:
         return None
+    won = (me.elo > old) if outcome is None else (outcome == "win")
     team = [p for p in players if p.team == me.team]
     opponent = [p for p in players if p.team != me.team]
     if not team or not opponent:
@@ -187,7 +186,7 @@ def _match_features(match: Match, me: Participant, trade: tuple[float, float]) -
     elif MODEL["weights"]["obj"]:
         return None
     return {"eloN": (old - 2100) / 400, "gapN": (old - average(players)) / 400,
-            "S": 1 if me.elo > old else 0, "E": expected,
+            "S": int(won), "E": expected,
             "x": {"kd": math.log2((dw + 200) / (lw + 200)),
                   "con": math.log2((dw + 200) / (avg_dw + 200)),
                   "obj": obj}}
@@ -257,29 +256,38 @@ def recent_score(match: Match, participant: Participant, analysis: Mapping | Non
     if me is None or (analysis is not None and not isinstance(analysis, Mapping)):
         return None
     roles = _career_roles(analysis)
-    if roles is None:
-        return None
-    features = _match_features(match, me, _career_trade(roles))
+    outcome = analysis_outcomes(analysis).get(match.id)
+    features = _match_features(match, me, _career_trade(roles), outcome)
     if features is None:
         return None
     combined, _ = _career_performance(features, roles)
     return _to10(_percentile(combined, MODEL["matchPct"]["career"]))
 
 
-def profile_rating(matches: list[Match], player_id: str, analysis: Mapping | None,
-                   win_rate: float | None) -> dict:
+def profile_rating(matches: list[Match], player_id: str, analysis: Mapping | None) -> dict:
     """Aggregate up to 20 valid recent rows. Input matches are newest first.
 
-    The caller supplies the independent observed win percentage from explicit
-    analysis won records. The model's Elo-derived S never supplies this axis.
+    The win-rate axis uses the newest 20 distinct matches with the player,
+    independently of score eligibility, and only their explicit results.
     """
     roles = _career_roles(analysis) if analysis is None or isinstance(analysis, Mapping) else None
+    outcomes = analysis_outcomes(analysis) if roles is not None else {}
     observations = []
+    recent_results = []
+    seen = set()
     if roles is not None:
         trade = _career_trade(roles)
         for match in matches:
+            if match.id in seen:
+                continue
             me = next((p for p in match.players if p.player_id == player_id), None)
-            features = _match_features(match, me, trade) if me is not None else None
+            if me is None:
+                continue
+            seen.add(match.id)
+            outcome = outcomes.get(match.id)
+            if len(seen) <= 20 and outcome is not None:
+                recent_results.append(outcome)
+            features = _match_features(match, me, trade, outcome)
             if features is None:
                 continue
             combined, parts = _career_performance(features, roles)
@@ -288,7 +296,8 @@ def profile_rating(matches: list[Match], player_id: str, analysis: Mapping | Non
                 break
 
     score = title = tone = None
-    axes = {"win_rate": win_rate if _finite(win_rate) and 0 <= win_rate <= 100 else None}
+    win_rate = win_rate_sample(recent_results)
+    axes = {"win_rate": win_rate["value"]}
     if observations:
         k = MODEL["kalman"]
         mean, variance = 0.0, k["P0"]
@@ -301,13 +310,14 @@ def profile_rating(matches: list[Match], player_id: str, analysis: Mapping | Non
         score = _to10(_percentile(mean, MODEL["playerPct"]))
         tier = next(t for threshold, t in MODEL["tiers"] if score >= _to10(threshold))
         title, tone = _PROFILE_TIERS[tier]
-        for key, _ in _PROFILE_AXES[:-1]:
+        for key, _ in PROFILE_AXES[:-1]:
             values = [parts[key] for _, _, parts in observations if key in parts]
             if values:
                 axes[key] = math.floor(sum(values) / len(values) * 100 + 0.5)
     return {"score": score, "title": title, "tone": tone, "sample_size": len(observations),
+            "win_rate_sample": win_rate,
             "dimensions": [{"key": key, "label": label, "value": axes.get(key)}
-                           for key, label in _PROFILE_AXES]}
+                           for key, label in PROFILE_AXES]}
 
 
 def score_band(score: float | None) -> Literal["low", "medium", "high"] | None:

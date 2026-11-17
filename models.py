@@ -6,6 +6,7 @@ unit/value exchanges are distinct; these models claim no lifetime coverage.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 import math
@@ -13,6 +14,9 @@ from typing import Any, Generic, Literal, TypeVar
 from urllib.parse import quote
 
 Outcome = Literal["win", "loss", "unknown"]
+AnalysisOutcome = Literal["win", "loss", "conflict"]
+PROFILE_AXES = (("kd", "交换效率"), ("contrib", "摧毁贡献"), ("obj", "夺点表现"),
+                ("outcome", "赛果超预期"), ("win_rate", "实际胜率"))
 Mode = Literal["ranked", "custom", "unknown"]
 T = TypeVar("T")
 
@@ -116,6 +120,33 @@ def canonical_id(value: Any) -> str:
     return result
 
 
+def analysis_outcomes(analysis: Mapping | None) -> dict[str, AnalysisOutcome]:
+    """Resolve explicit results by exact match ID; absence is distinct from conflict."""
+    outcomes: dict[str, AnalysisOutcome] = {}
+    for point in (analysis or {}).get("trend", {}).get("points", []):
+        try:
+            mid = canonical_id(point.get("matchId"))
+        except ValueError:
+            continue
+        won = point.get("won")
+        if point.get("wonConflict") is True:
+            outcomes[mid] = "conflict"
+        elif isinstance(won, bool):
+            result = "win" if won else "loss"
+            outcomes[mid] = result if outcomes.get(mid, result) == result else "conflict"
+    return outcomes
+
+
+def win_rate_sample(outcomes: Iterable[AnalysisOutcome]) -> dict:
+    wins = losses = 0
+    for outcome in outcomes:
+        wins += outcome == "win"
+        losses += outcome == "loss"
+    size = wins + losses
+    return {"value": 100 * wins / size if size else None,
+            "sample_size": size, "wins": wins, "losses": losses}
+
+
 def _object(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("expected an object")
@@ -207,10 +238,16 @@ def _parse_analysis(payload: Any) -> dict[str, Any]:
                 previous["endTime"] is None or point["endTime"] > previous["endTime"]
             ):
                 points[positions[mid]] = point
-        points[positions[mid]]["won"] = next(iter(outcomes)) if len(outcomes) == 1 else None
+    for mid, outcomes in results.items():
+        point = points[positions[mid]]
+        point["won"] = next(iter(outcomes)) if len(outcomes) == 1 else None
+        if len(outcomes) > 1:
+            point["wonConflict"] = True
     units = []
     for raw in _array(analysis, "highlightUnits"):
         row = _object(raw)
+        if row.get("unitId") is None:
+            continue
         units.append({
             "unitId": canonical_id(row.get("unitId")),
             "unitName": _name(row.get("unitName")) or None,
@@ -224,6 +261,8 @@ def _parse_analysis(payload: Any) -> dict[str, Any]:
     categories = []
     for raw in _array(analysis, "categoryPreferences"):
         row = _object(raw)
+        if row.get("categoryKey") is None:
+            continue
         categories.append({
             "categoryKey": canonical_id(row.get("categoryKey")),
             "percentage": _percentage(row.get("percentage")),
