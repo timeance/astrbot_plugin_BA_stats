@@ -1,0 +1,9 @@
+{% macro exchange(metrics) %}
+<div class="exchange">
+  {% for metric in metrics %}
+  <div><p class="metric-label">{{ metric.label }}</p><p class="small-value">{{ metric.value }}{% if metric.unit %}<span class="metric-unit">{{ metric.unit }}</span>{% endif %}</p></div>
+  {% endfor %}
+</div>
+{% endmacro %}
+
+{% macro outcome(value) %}<span class="outcome {{ value.key }}">{{ value.label }}</span>{% endmacro %}

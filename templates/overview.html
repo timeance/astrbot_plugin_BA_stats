@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<section aria-label="常用单位与兵种">
+  <h2 class="section-heading">常用单位 / 兵种</h2>
+  {% if view.common_units %}
+  <ul class="unit-list">
+    {% for unit in view.common_units %}
+    <li><span class="unit-name">{{ unit.name }}</span><span class="unit-count">{{ unit.count }}{% if unit.count != '暂无' %} 个{% endif %}</span></li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="empty">暂无</p>{% endif %}
+</section>
+{% endblock %}
