@@ -15,6 +15,10 @@ Service -> Renderer view contract (independent of models.py):
     losses, destroyed_value, lost_value, unit_exchange, value_exchange}]}].
     Team sizes are unrestricted; never pad absent players with dummy rows.
   common_units (overview, optional): [{name: str, count?: int}].
+  profile_rating (overview): {score: 1..10 | None, title, tone, sample_size,
+    dimensions: [{key: kd|contrib|obj|outcome|win_rate, label, value: 0..100 | None}]}.
+    The last axis is actual win rate. Missing axes never become zero points.
+  style_scope (overview): actual analysis sample label, e.g. 近100场风格.
   scope: str describing actual sample / mode / coverage (never inferred).
   fetched_at, source_updated_at: aware datetime or ISO 8601 with timezone.
   stale: bool; source_url: optional public http(s) link; notes?: list[str].
@@ -45,6 +49,7 @@ import base64
 from copy import deepcopy
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from math import cos, pi, sin
 from pathlib import Path
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -57,6 +62,8 @@ _OUTCOMES = {"win": "胜利", "loss": "失利", "unknown": "胜负暂无"}
 _MODES = {"ranked": "排位", "custom": "自定义", "unknown": "暂无"}
 _ROLES = {"装甲": "armor", "步兵": "infantry", "侦察": "recon", "炮兵": "artillery",
           "防空": "air-defense", "直升机": "helicopter", "固定翼": "aircraft", "后勤/运输": "logistics"}
+_PROFILE_AXES = (("kd", "分值 K/D"), ("contrib", "摧毁贡献"), ("obj", "占点贡献"),
+                 ("outcome", "胜负预期"), ("win_rate", "实际胜率"))
 
 
 def _plain(value, default=MISSING) -> str:
@@ -77,15 +84,17 @@ def _number(value) -> Decimal | None:
         return None
 
 
-def _numeric(value, style="decimal") -> str:
+def _numeric(value, style="decimal", *, compact=False) -> str:
     parsed = _number(value)
     if parsed is None:
         return MISSING
     if style == "integer":
-        return str(int(parsed)) if parsed == parsed.to_integral_value() else MISSING
+        return format(int(parsed), ",d" if compact else "d") if parsed == parsed.to_integral_value() else MISSING
     if style == "decimal" and parsed == parsed.to_integral_value():
-        return str(int(parsed))
-    return format(parsed, "+.2f" if style == "signed" else ".2f")
+        return format(int(parsed), ",d" if compact else "d")
+    sign = "+" if style == "signed" else ""
+    result = format(parsed, sign + ("," if compact else "") + ".2f")
+    return result.rstrip("0").rstrip(".") if compact else result
 
 
 def _split_width(values) -> float | None:
@@ -131,6 +140,8 @@ def _outcome(value) -> dict:
 
 class Renderer:
     """Render self-contained cards without network access or model imports."""
+
+    WIDTHS = {"overview": 640, "recent": 800, "match": 900}
 
     def __init__(self, theme: str = "light", timezone: str = "Asia/Shanghai"):
         if theme not in {"dark", "light"}:
@@ -191,12 +202,12 @@ class Renderer:
         return f"{hours}时{minutes:02d}分{seconds:02d}秒" if hours else f"{minutes}分{seconds:02d}秒"
 
     @staticmethod
-    def _metric(metric: Mapping) -> dict:
+    def _metric(metric: Mapping, *, compact=False) -> dict:
         value = metric.get("value")
         style = metric.get("format", "decimal")
         if style not in {"integer", "decimal", "percent", "signed"}:
             style = "decimal"
-        formatted = _plain(value) if isinstance(value, str) else _numeric(value, style)
+        formatted = _plain(value) if isinstance(value, str) else _numeric(value, style, compact=compact)
         unit = _plain(metric.get("unit"), "")
         if style == "percent" and not unit:
             unit = "%"
@@ -215,7 +226,7 @@ class Renderer:
         """Pair comparable values, preserving zero and unknown independently."""
         def value(key, style="decimal"):
             raw = item.get(key)
-            return _plain(raw) if isinstance(raw, str) else _numeric(raw, style)
+            return _plain(raw) if isinstance(raw, str) else _numeric(raw, style, compact=not elo)
 
         def pair(first, second, style="decimal"):
             return f"{value(first, style)} / {value(second, style)}"
@@ -230,6 +241,8 @@ class Renderer:
             {"label": "摧毁 / 损失", "value": pair("destroyed_value", "lost_value")},
             {"label": "击杀 / 阵亡", "value": pair("kills", "losses", "integer")},
         ])
+        if not elo:
+            metrics[-2], metrics[-1] = metrics[-1], metrics[-2]
         if elo:
             if any(item.get(key) is not None for key in ("damage_dealt", "damage_received")):
                 metrics.append({"label": "伤害 / 承伤", "value": pair("damage_dealt", "damage_received")})
@@ -240,6 +253,48 @@ class Renderer:
                     metrics.append({"label": label, "value": value(key, style)})
         return [self._metric(metric) for metric in metrics]
 
+    @staticmethod
+    def _profile(value) -> dict:
+        rating = _mapping(value)
+        score = _number(rating.get("score"))
+        if score is not None and not 1 <= score <= 10:
+            score = None
+        tone = _plain(rating.get("tone"), "")
+        supplied = {item.get("key"): item for item in _records(rating.get("dimensions"))
+                    if isinstance(item.get("key"), str)}
+
+        center = (180, 114)
+        radius = 66
+
+        def point(index, radius):
+            angle = -pi / 2 + index * 2 * pi / 5
+            return (center[0] + radius * cos(angle), center[1] + radius * sin(angle))
+
+        def coordinates(points):
+            return " ".join(f"{x:.2f},{y:.2f}" for x, y in points)
+
+        axes = []
+        for index, (key, label) in enumerate(_PROFILE_AXES):
+            number = _number(supplied.get(key, {}).get("value"))
+            if number is not None and not 0 <= number <= 100:
+                number = None
+            x, y = point(index, 88)
+            xy = point(index, float(number) * radius / 100) if number is not None else None
+            axes.append({"key": key, "label": label,
+                         "display": _numeric(number, compact=True) + ("%" if key == "win_rate" and number is not None else ""),
+                         "x": f"{x:.2f}", "y": f"{y - 4:.2f}",
+                         "anchor": "middle" if index == 0 else "start" if index in (1, 2) else "end",
+                         "line": coordinates([center, point(index, radius)]),
+                         "point": xy})
+        complete = all(axis["point"] is not None for axis in axes)
+        return {"score": format(score, ".1f") if score is not None else MISSING,
+                "title": _plain(rating.get("title"), "") if score is not None else "",
+                "tone": tone if score is not None and tone in {"low", "medium", "high"} else "medium",
+                "axes": axes,
+                "rings": [coordinates([point(index, radius * step / 4) for index in range(5)]) for step in range(1, 5)],
+                "polygon": coordinates([axis["point"] for axis in axes]) if complete else "",
+                }
+
     def _prepare(self, view: dict) -> dict:
         kind = view.get("kind", "overview")
         if kind not in _TITLES:
@@ -248,6 +303,7 @@ class Renderer:
         match = _mapping(view.get("match"))
         prepared = {
             "kind": kind,
+            "width": self.WIDTHS[kind],
             "github_logo": self._github_logo,
             "title": _plain(view.get("title"), _TITLES[kind]),
             "theme": self.theme,
@@ -256,7 +312,7 @@ class Renderer:
                 "id": _plain(player.get("id")),
                 "source_url": _safe_url(player.get("source_url")),
             },
-            "metrics": [self._metric(item) for item in _records(view.get("metrics"))],
+            "metrics": [self._metric(item, compact=kind != "match") for item in _records(view.get("metrics"))],
             "scope": _plain(view.get("scope")),
             "fetched_at": self._time(view.get("fetched_at")),
             "source_updated_at": self._time(view.get("source_updated_at")),
@@ -265,20 +321,23 @@ class Renderer:
             "synthetic": view.get("synthetic") is True,
             "notes": [_plain(note) for note in view.get("notes", [])] if isinstance(view.get("notes"), (list, tuple)) else [],
             "common_units": [
-                {"name": _plain(item.get("name")), "count": _numeric(item.get("count"), "integer"),
-                 "damage": _numeric(item.get("damage")), "roi": _numeric(item.get("roi"))}
+                {"name": _plain(item.get("name")), "count": _numeric(item.get("count"), "integer", compact=True),
+                 "damage": _numeric(item.get("damage"), compact=True), "roi": _numeric(item.get("roi"), compact=True)}
                 for item in _records(view.get("common_units"))
             ],
-            "analysis_scope": _plain(view.get("analysis_scope"), ""),
-            "categories": [{"name": _plain(item.get("name")), "percentage": _numeric(item.get("percentage"))}
+            "style_scope": _plain(view.get("style_scope"), ""),
+            "categories": [{"name": _plain(item.get("name")), "percentage": self._metric(
+                {"value": item.get("percentage"), "format": "percent"}, compact=True)["display"]}
                            for item in _records(view.get("categories"))],
-            "map_stats": [{"name": _plain(item.get("name")), "count": _numeric(item.get("count"), "integer"),
-                           "win_rate": _numeric(item.get("win_rate"))}
+            "map_stats": [{"name": _plain(item.get("name")), "count": _numeric(item.get("count"), "integer", compact=True),
+                           "win_rate": _numeric(item.get("win_rate"), compact=True)}
                           for item in _records(view.get("map_stats"))],
             "rows": [],
             "teams": [],
             "pagination": "",
         }
+        if kind == "overview":
+            prepared["profile_rating"] = self._profile(view.get("profile_rating"))
         for item in _records(view.get("rows")):
             score = _number(item.get("score"))
             prepared["rows"].append({
@@ -290,7 +349,7 @@ class Renderer:
                 "mode": _MODES.get(_plain(item.get("mode")), _plain(item.get("mode"))),
                 "outcome": _outcome(item.get("outcome")),
                 "duration": self._duration(item.get("duration_seconds")),
-                "elo_delta": _numeric(item.get("elo_delta"), "signed"),
+                "elo_delta": _numeric(item.get("elo_delta"), "signed", compact=True),
                 "exchange": self._exchange(item),
                 "source_url": _safe_url(item.get("source_url")),
             })
@@ -403,14 +462,17 @@ class Renderer:
             return " · ".join(f"{m['label']}：{m['display']}" + (f"（{m['note']}）" if m["note"] else "") for m in items)
 
         if data["kind"] == "overview":
+            profile = data["profile_rating"]
+            lines.append("综合评分 " + profile["score"] + (" · " + profile["title"] if profile["title"] else ""))
             for offset in range(0, len(data["metrics"]), 2):
                 lines.append(metrics(data["metrics"][offset:offset + 2]))
             if not data["metrics"]:
                 lines.append("统计指标：暂无")
-            if data["analysis_scope"]:
-                lines.append(data["analysis_scope"])
+            lines.append("五维表现：" + " · ".join(f"{axis['label']} {axis['display']}" for axis in profile["axes"]))
+            if data["style_scope"]:
+                lines.append(data["style_scope"] + ("：暂无" if not data["categories"] else ""))
             if data["categories"]:
-                lines.append("兵种：" + " · ".join(f"{c['name']} {c['percentage']}%" for c in data["categories"]))
+                lines.append("兵种：" + " · ".join(f"{c['name']} {c['percentage']}" for c in data["categories"]))
             if data["common_units"]:
                 lines.append("常用单位")
                 for unit in data["common_units"]:

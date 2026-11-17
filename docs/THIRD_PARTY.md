@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | [AstrBot](https://github.com/astrbotdevs/astrbot) | 原生插件 API、ZIP 格式与配置 Schema 核对 | v4.29.4，`61335414433db721b3f7ecc93f90deafe0a59d78` |
 | [AstrBot T2I](https://github.com/AstrBotDevs/astrbot-t2i-service) | 核对 `viewport_width`、像素比及 JPEG 质量参数 | `bcc08e47274c69e5ace19bbf738b95260ce17ca7` |
-| [ba-dragon](https://github.com/AlexanderHYu/ba-dragon) | BATrace 接口参考；逐局评分、赛前 ELO 预测及兵种构成估算的 MIT 移植 | `072dc9bc2d73ffc87000c1d3db4c0f9b4dcab549`，详见下文及 API_NOTES.md |
+| [ba-dragon](https://github.com/AlexanderHYu/ba-dragon) | BATrace 接口参考；逐局评分、玩家综合评分、赛前 ELO 预测及兵种构成估算的 MIT 移植 | `072dc9bc2d73ffc87000c1d3db4c0f9b4dcab549`，详见下文及 API_NOTES.md |
 | [wows-stats-bot](https://github.com/benx1n/wows-stats-bot) | README 中绑定与 @ 查询的交互研究，未移植 HoshinoBot 实现 | master，`80c86970685887578054e61e1a76d1589ea1dc31` |
 | [BATrace](https://dash.batrace.top/) | 预期战绩数据来源 | 自身接入许可、配额及真实字段待确认 |
 | [astrbot_plugin_openai_native](https://github.com/timeance/astrbot_plugin_openai_native) | 参考用户跨群累计、群共享额度、配置提示与额度查询；按本任务要求统一私聊用户计数和北京时间日界 | main，`98bd76784bb2a35df0aea968138f87fd4d9ee207`；核对 README、配置 Schema、事件身份提取 |
@@ -15,11 +15,11 @@
 
 ## ba-dragon 评分与模型
 
-`scoring.py` 将固定提交中的 `src/shared/dragon/score.ts`、`roles.ts`、`model.ts` 相关逻辑移植为 Python；`assets/scoring-model.json` 使用同一提交的 `src/shared/dragon/model.json` 参数，以及评分和兵种构成所需的单位角色与基础价格信息。模型内的 `source` 记录仓库、提交、来源文件和 MIT 文本。
+`scoring.py` 将固定提交中的 `src/shared/dragon/score.ts`、`roles.ts`、`model.ts` 相关逻辑移植为 Python；`assets/scoring-model.json` 从同一提交的 `src/shared/dragon/model.json` 提取评分参数，单位表仅保留角色和基础价格。模型内的 `source` 记录仓库、提交、来源文件和完整 MIT 文本。
 
-移植范围是逐局评分、基于赛前 ELO 的预测及按基础花费估算的兵种构成。展示统一称「评分」，按分数着色；不包含称号、时间线或 Kalman 生涯聚合。模型结果是估算，不代表官方评价。
+玩家概览使用 `computeDragonScore` 的 Kalman 聚合、玩家分位表、分档和四个表现分项；分档称号取自 `src/renderer/src/features/players/PlayerDetail.tsx`。第五项「实际胜率」由插件服务根据明确的 `won` 计算并传入评分模块。近期战绩保持逐局评分。未移植单局奖项、时间线或实力 ELO；这些模型分数不代表官方评价。
 
-完整上游版权与 MIT 许可原样保留于 [BA_DRAGON_LICENSE.txt](BA_DRAGON_LICENSE.txt)，包括 `Copyright (c) 2026 AlexanderHYu` 及 `Copyright (c) 2025-2026 Zola (Zawinzala)` 与原文件的沿用部分说明。安装包、源码包及 Gemini 文案包均保留该文本；文案润色不修改许可证。
+[BA_DRAGON_LICENSE.txt](BA_DRAGON_LICENSE.txt) 和模型的 `source.licenseText` 均原样保留固定提交的 `LICENSE`，包括 `Copyright (c) 2026 AlexanderHYu` 及 `Copyright (c) 2025-2026 Zola (Zawinzala)` 与原文件的沿用部分说明。分发这些移植代码或模型时，安装包、源码和 Gemini 文案包均应保留完整上游版权及 MIT 许可；文案润色不修改该文本。
 
 未移植参考项目的录像工具或 FFmpeg。其 README 提到的可选 GPL FFmpeg 不随本插件分发。
 

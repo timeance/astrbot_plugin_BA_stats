@@ -727,16 +727,19 @@ async def test_cancelled_image_send_is_not_converted_to_fallback(app, monkeypatc
     event.send.assert_awaited_once()
 
 
-async def test_image_render_uses_mobile_jpeg_contract_and_fixed_outer_template(app, monkeypatch, tmp_path):
+@pytest.mark.parametrize(("kind", "width"), [("overview", 640), ("recent", 800), ("match", 900), (None, 640)])
+async def test_image_render_uses_card_width_and_fixed_outer_template(app, monkeypatch, tmp_path, kind, width):
     plugin = await app.make(images=True)
     source = tmp_path / "synthetic-render.jpg"
     source.write_bytes(image_bytes())
     render = AsyncMock(return_value=str(source))
     monkeypatch.setattr(plugin, "html_render", render)
     view = {
-        "kind": "overview", "player": {"id": "001", "name": "Synthetic {{ 7 * 7 }} a  b"},
+        "player": {"id": "001", "name": "Synthetic {{ 7 * 7 }} a  b"},
         "scope": "合成测试样本", "fetched_at": datetime(2026, 11, 17, tzinfo=timezone.utc),
     }
+    if kind is not None:
+        view["kind"] = kind
     first = await plugin._image(view, "onebot:test:group:one")
     assert first.path.suffix == ".jpg"
     assert first.path.read_bytes() == source.read_bytes()
@@ -749,7 +752,7 @@ async def test_image_render_uses_mobile_jpeg_contract_and_fixed_outer_template(a
     assert options["umo"] == "onebot:test:group:one"
     assert options["options"] == {
         "type": "jpeg", "quality": 85, "full_page": True,
-        "viewport_width": 390, "device_scale_factor_level": "ultra",
+        "viewport_width": width, "device_scale_factor_level": "ultra",
     }
     second = await plugin._image(view, "onebot:test:group:two")
     assert second != first

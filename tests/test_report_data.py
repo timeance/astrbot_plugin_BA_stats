@@ -77,12 +77,12 @@ async def test_overview_separates_analysis_denominator_recent_values_and_single_
     data = metrics(view)
     assert data["ELO"]["value"] == 1000
     assert data["近期分值 K/D"]["value"] == 3  # (100 + 200) / (25 + 75)
-    assert "2 场" in data["近期分值 K/D"]["note"]
     assert data["分析样本胜率"]["value"] == pytest.approx(200 / 3)
-    assert data["分析样本胜率"]["note"] == "2 胜 / 3 场已知结果"
-    assert data["伤害交换比"]["value"] == 2.5
-    assert data["伤害交换比"]["note"] == "分析单局 · #win"
-    assert view["analysis_scope"] == "分析样本80场 · 与近期样本独立"
+    dims = {axis["key"]: axis["value"] for axis in view["profile_rating"]["dimensions"]}
+    assert dims["win_rate"] == 50  # Only the win and loss are in the recent sample.
+    assert dims["outcome"] is None  # Team ELO is missing, but the actual outcomes are known.
+    assert data["单局伤害交换比"]["value"] == 2.5
+    assert view["style_scope"] == "近80场风格"
     assert view["scope"] == "近期3场 · 11-17—11-17"
     assert [row["outcome"] for row in view["rows"]] == ["win", "loss", "unknown"]
     assert player == original_player and matches == original_matches
@@ -100,8 +100,7 @@ async def test_won_requires_boolean_and_an_exact_target_match_id(report, won, ex
     assert [row["outcome"] for row in view["rows"]] == [expected, "unknown", "unknown"]
     assert view["rows"][0]["outcome_source"] == ("analysis" if won is not None else None)
     assert metrics(view)["分析样本胜率"]["value"] == percentage
-    if won is None:
-        assert "0 场已知结果" in metrics(view)["分析样本胜率"]["note"]
+    assert view["profile_rating"]["dimensions"][-1]["value"] == percentage
 
 
 async def test_duplicate_results_conflict_stays_unknown_and_does_not_inflate_win_rate(report):
@@ -113,7 +112,7 @@ async def test_duplicate_results_conflict_stays_unknown_and_does_not_inflate_win
     view = await report.run(player, [recent(report, "42"), recent(report, "ok")])
     assert [row["outcome"] for row in view["rows"]] == ["unknown", "loss"]
     assert metrics(view)["分析样本胜率"]["value"] == 0
-    assert metrics(view)["分析样本胜率"]["note"] == "0 胜 / 1 场已知结果"
+    assert view["profile_rating"]["dimensions"][-1]["value"] == 0
 
 
 async def test_overview_units_maps_and_categories_use_analysis_and_preserve_same_name_ids(report):
@@ -123,7 +122,7 @@ async def test_overview_units_maps_and_categories_use_analysis_and_preserve_same
             {"unitId": "b", "unitName": "Same", "spawnCount": 3},
             {"unitId": "c"}, {"unitId": "d", "unitName": "Fourth"},
         ],
-        "categoryPreferences": [{"categoryKey": "tank", "percentage": 0},
+        "categoryPreferences": [{"categoryKey": "support", "percentage": 0},
                                 {"categoryKey": "infantry", "percentage": 75}],
         "mapPerformance": [{"mapId": 20 + i, "mapName": f"Map {i}", "matchCount": i,
                             "winRate": 0 if i == 0 else 50} for i in range(6)],
@@ -136,7 +135,7 @@ async def test_overview_units_maps_and_categories_use_analysis_and_preserve_same
         {"id": "b", "name": "Same（ID：b）", "count": 3, "damage": None, "roi": None},
         {"id": "c", "name": "单位#c", "count": None, "damage": None, "roi": None},
     ]
-    assert view["categories"] == [{"name": "tank", "percentage": 0}, {"name": "infantry", "percentage": 75}]
+    assert view["categories"] == [{"name": "支援", "percentage": 0}, {"name": "步兵", "percentage": 75}]
     assert len(view["map_stats"]) == 5
     assert view["map_stats"][0] == {"name": "Map 0", "count": 0, "win_rate": 0}
     assert view["rows"][0]["map_name"] == "Map 0"
@@ -150,8 +149,8 @@ async def test_analysis_empty_lists_remain_empty_without_inventing_statistics(re
     assert view["common_units"] == view["map_stats"] == view["categories"] == []
     assert metrics(view)["近期分值 K/D"]["value"] is None
     assert metrics(view)["分析样本胜率"]["value"] is None
-    assert metrics(view)["伤害交换比"]["value"] is None
-    assert view["analysis_scope"] == "分析样本0场 · 与近期样本独立"
+    assert metrics(view)["单局伤害交换比"]["value"] is None
+    assert view["style_scope"] == "近0场风格"
     assert view["rows"][0]["map_name"] == "地图#20"
 
 
@@ -254,6 +253,23 @@ async def test_recent_scores_flow_to_html_and_text_without_changing_result_autho
     view["rows"] = report.s.recent_rows([recent(report, "missing")], player.id, player)
     assert view["rows"][0]["score"] is None
     assert "评分 暂无" in renderer.text(view)
+
+
+async def test_overview_renders_aggregate_and_separate_observed_win_rate(report):
+    from render import Renderer
+
+    player = report.player({"trend": {"points": [{"matchId": "score-fixture", "won": True}]}})
+    match = scoring_report_match(report)
+    for participant in match.players:
+        participant.objectives = 0
+    view = await report.run(player, [match])
+    rating = view["profile_rating"]
+    # Pinned computeDragonScore gives 7.9 for the profile and 9.3 for the single match.
+    assert (rating["score"], rating["title"]) == (7.9, "有龙样")
+    assert [axis["value"] for axis in rating["dimensions"]] == [91, 53, 53, 92, 100]
+    for output in (Renderer().template(view), Renderer().text(view)):
+        assert all(term in output for term in ("7.9", "有龙样", "胜负预期", "胜率", "100%"))
+    report.client.match.assert_not_awaited()
 
 
 def test_match_prediction_composition_and_a_b_order_reach_both_renderers(report):

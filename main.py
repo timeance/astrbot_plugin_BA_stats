@@ -155,7 +155,7 @@ class BAStatsPlugin(Star):
         await self.storage.open()
         self._images.mkdir(parents=True, exist_ok=True)
         self._prune_images()
-        self.diagnostics.record("plugin_start", status="0.1.4")
+        self.diagnostics.record("plugin_start", status="0.1.5")
 
     async def _run(self, awaitable, *, timed=True):
         if self._closed:
@@ -227,8 +227,13 @@ class BAStatsPlugin(Star):
             progress["stage"] = "generate"
             source = await self.html_render(
                 "{{ body | safe }}", {"body": html}, return_url=True,
-                options={"type": "jpeg", "quality": 85, "full_page": True,
-                         "viewport_width": 900 if view.get("kind") == "match" else 390, "device_scale_factor_level": "ultra"}, umo=umo)
+                options={
+                    "type": "jpeg", "quality": 85, "full_page": True,
+                    "viewport_width": Renderer.WIDTHS[view.get("kind", "overview")],
+                    "device_scale_factor_level": "ultra",
+                },
+                umo=umo,
+            )
             url = source if is_image_url(source) else None
             content_type = ""
             if url:
@@ -304,7 +309,7 @@ class BAStatsPlugin(Star):
                   "schema": "响应结构变化", "identity_mismatch": "身份校验失败",
                   "no_data": "暂无收录", "upstream": "上游暂不可用", "queue_full": "队列已满",
                   "not_configured": "接入未配置", "closed": "客户端已关闭", "daily_quota": "每日额度已用完"}
-        return (f"断箭战报 v0.1.4\n在线查询：{'已启用' if status['configured'] else '未启用或 API 地址无效'}\n"
+        return (f"断箭战报 v0.1.5\n在线查询：{'已启用' if status['configured'] else '未启用或 API 地址无效'}\n"
                 f"今日总请求：{usage['global']}/{GLOBAL_DAILY_LIMIT}（固定上限）；北京时间 0 点重置\n"
                 f"本次运行请求：{status['requests']}；进行中：{status['inflight']}\n"
                 f"API 缓存：{await self.storage.cache_count()} 条；命中：{status['cache_hits']}；旧缓存：{status['stale_hits']}\n"

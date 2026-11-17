@@ -2,13 +2,13 @@
 
 Run from the repository using the session's .venv/Scripts/python.exe -B:
   tools/render_previews.py                 # HTML + matching text only
-  tools/render_previews.py --screenshots   # desktop + 390px mobile PNGs
+  tools/render_previews.py --screenshots   # production, 390px reflow, and 390px chat previews
 
 Chromium must already be installed under the session's .playwright directory.
 No installation, server, external page, account, or live API is used. Browser
 contexts are offline and all requests are aborted as an additional boundary.
 All outputs, browser temporary profiles and the manifest stay under the
-session root's previews/. Images show synthetic samples, never real players.
+selected output directory. Images show synthetic samples, never real players.
 """
 
 from __future__ import annotations
@@ -25,17 +25,19 @@ import tempfile
 sys.dont_write_bytecode = True
 REPOSITORY = Path(__file__).resolve().parents[1]
 SESSION = REPOSITORY.parent
-OUTPUT = SESSION / "previews"
+OUTPUT = SESSION / "tmp" / "overview-v015" / "previews"
 sys.path.insert(0, str(REPOSITORY))
 
 from render import Renderer
+
+PHONE_WIDTH = 390
 
 
 def sample_views() -> dict[str, dict]:
     """Deterministic synthetic data, including long names and missing fields."""
     base = {
-        "player": {"id": "sample-000001", "name": "蓝线观察员 · 合成样本"},
-        "scope": "最近取得 5 场 · 其中排位样本 4 场 · 非完整历史",
+        "player": {"id": "sample-000001", "name": "蓝线观察员"},
+        "scope": "近期5场 · 11-13—11-17",
         "fetched_at": "2026-11-17T04:10:00Z",
         "source_updated_at": "2026-11-17T04:00:00Z",
         "source_url": "https://example.invalid/synthetic-preview",
@@ -45,14 +47,22 @@ def sample_views() -> dict[str, dict]:
     overview.update(
         kind="overview",
         metrics=[
-            {"label": "ELO", "value": 1834.25, "note": "来源更新时点"},
-            {"label": "分析样本胜率", "value": 75, "format": "percent", "note": "75 胜 / 100 场已知结果"},
-            {"label": "近期分值 K/D", "value": 150 / 96, "note": "近期 5 场摧毁分 ÷ 损失分"},
-            {"label": "伤害交换比", "value": 39602 / 26081, "note": "分析单局 · #sample-match-001"},
+            {"label": "ELO", "value": 1854.02},
+            {"label": "近期分值 K/D", "value": 1.42},
+            {"label": "分析样本胜率", "value": 40, "format": "percent"},
+            {"label": "单局伤害交换比", "value": 1.3},
         ],
-        common_units=[{"name": "合成装甲单位 A", "count": 12,"damage":5200,"roi":1.6}, {"name": "合成支援兵种 B", "count": 8,"damage":2100,"roi":1.2}],
-        analysis_scope="分析样本 100 场",
-        map_stats=[{"name":"合成港区","count":8,"win_rate":50}],
+        profile_rating={"score": 5.8, "title": "泯然众人", "tone": "medium", "sample_size": 4,
+                        "dimensions": [{"key": key, "label": label, "value": value} for key, label, value in
+                                       (("kd", "分值 K/D", 37), ("contrib", "摧毁贡献", 59), ("obj", "占点贡献", 30),
+                                        ("outcome", "胜负预期", 51), ("win_rate", "实际胜率", 60))]},
+        common_units=[{"name": "Tu-95", "count": 72, "damage": 11682.87, "roi": 1.62},
+                      {"name": "Mi-8AMTSh-VN Sapsan", "count": 165, "damage": 7074.14, "roi": .37}],
+        style_scope="近83场风格", categories=[{"name": name, "percentage": value} for name, value in
+                                             (("支援", 31.4), ("固定翼", 30.7), ("步兵", 10.7), ("车辆", 10.1),
+                                              ("侦察", 9.6), ("直升机", 7.5))],
+        map_stats=[{"name": "合成港区", "count": 8, "win_rate": 50},
+                   {"name": "合成山区", "count": 6, "win_rate": 100 / 3}],
     )
     recent = deepcopy(base)
     recent.update(kind="recent", rows=[
@@ -68,6 +78,7 @@ def sample_views() -> dict[str, dict]:
         for index in range(5)
     ])
     match = deepcopy(base)
+    match["player"]["name"] += " · 合成样本"
     match.update(
         kind="match", scope="单场记录 · 排位 · 5 对 5 人",
         match={"id": "sample-match-001", "map_name": "合成港区", "mode": "ranked",
@@ -86,7 +97,7 @@ def sample_views() -> dict[str, dict]:
                                                         ("固定翼", (24, 20)), ("后勤/运输", (1, 1))]],
              "composition_note":"合成样本", "players": [
                 {"id": base["player"]["id"] if side == 0 and index == 1 else f"sample-{side}-{index}",
-                 "name": base["player"]["name"] if side == 0 and index == 1 else f"合成队员 {side + 1}-{index + 1}",
+                 "name": match["player"]["name"] if side == 0 and index == 1 else f"合成队员 {side + 1}-{index + 1}",
                  "elo_before": 1800 + index * 12.5,
                  "elo": 1800 + index * 12.5 + (8.25 if side == 0 else -8.25), "elo_delta": 8.25 if side == 0 else -8.25,
                  "damage_dealt": 1253, "damage_received": 964, "objectives": 3,
@@ -102,12 +113,18 @@ def sample_views() -> dict[str, dict]:
     for kind, normal in [("overview", overview), ("recent", recent), ("match", match)]:
         samples[f"{kind}-normal"] = normal
         long = deepcopy(normal)
-        long["player"]["name"] = "合成长昵称_中文MixedPlayer_" * 7 + '{{7*7}} <昵称>&'
+        long["player"]["name"] = "合成长昵称_中文MixedPlayer_" * (7 if kind == "match" else 3) + '{{7*7}} <昵称>&'
         long["player"]["id"] = "sample-long-id-" + "0123456789" * 8
         if kind == "overview":
-            long["common_units"][0]["name"] = "合成长单位名称_" * 8
+            long["metrics"][0]["value"] = 12345.67
+            long["profile_rating"]["dimensions"][0]["value"] = 100
+            long["common_units"][0]["name"] = "合成长单位名称_" * 3
+            long["common_units"][1].update(name="LongUnitDesignationWithoutSpaces" * 2, damage=1234567.89)
+            long["map_stats"][0].update(name="合成长地图名称_" * 3, win_rate=0)
         elif kind == "recent":
-            long["rows"][0]["map_name"] = "合成长地图名称_" * 6
+            long["rows"][0].update(map_name="合成长地图名称_" * 3, id=long["player"]["id"],
+                                   destroyed_value=9876543.21, lost_value=1234567.89,
+                                   value_exchange=9876543.21 / 1234567.89)
         else:
             long["teams"][0]["name"] = "合成长分队名称_" * 7
             long["teams"][0]["players"][0]["name"] = long["player"]["name"]
@@ -116,11 +133,14 @@ def sample_views() -> dict[str, dict]:
         missing.update(kind=kind, player={"id": "sample-missing", "name": None},
                        source_url=None, source_updated_at=None, stale=True, scope="已取得样本 · 覆盖范围暂无")
         if kind == "overview":
-            missing["metrics"] = [
-                {"label": "ELO", "value": None}, {"label": "样本胜率", "value": None, "format": "percent"},
-                {"label": "实际样本", "value": 0, "format": "integer", "unit": "场"},
-                {"label": "价值交换比", "value": None},
-            ]
+            missing["metrics"] = [dict(metric, value=None) for metric in overview["metrics"]]
+            missing["profile_rating"] = deepcopy(overview["profile_rating"])
+            missing["profile_rating"].update(score=None, title=None, tone=None, sample_size=0)
+            for axis in missing["profile_rating"]["dimensions"]:
+                axis["value"] = 0 if axis["key"] == "win_rate" else None
+            missing["style_scope"] = "近0场风格"
+            missing["common_units"] = [{"name": "合成未完整单位", "count": 0, "roi": 0}]
+            missing["map_stats"] = [{"name": "合成未完整地图", "count": 2}]
         elif kind == "recent":
             missing["rows"] = [{"id": "sample-partial", "kills": 0, "duration_seconds": 0}]
         else:
@@ -132,9 +152,10 @@ def sample_views() -> dict[str, dict]:
 
 
 async def screenshots(artifacts: list[dict]) -> list[dict]:
+    from PIL import Image
     from playwright.async_api import async_playwright
 
-    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(SESSION / ".playwright"))
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(SESSION / ".playwright")
     temporary = OUTPUT / ".tmp"
     temporary.mkdir(exist_ok=True)
     os.environ["TMP"] = str(temporary)
@@ -144,7 +165,7 @@ async def screenshots(artifacts: list[dict]) -> list[dict]:
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         try:
-            for label, width in [("desktop", 900), ("mobile", 390)]:
+            for width in [*Renderer.WIDTHS.values(), PHONE_WIDTH]:
                 context = await browser.new_context(viewport={"width": width, "height": 900},
                                                     device_scale_factor=1, offline=True)
                 await context.route("**/*", lambda route: route.abort())
@@ -153,23 +174,64 @@ async def screenshots(artifacts: list[dict]) -> list[dict]:
                     requests = []
                     page.on("request", lambda request: requests.append(request.url))
                     for item in artifacts:
+                        if width not in (Renderer.WIDTHS[item["kind"]], PHONE_WIDTH):
+                            continue
                         requests.clear()
                         await page.set_content((OUTPUT / item["html"]).read_text(encoding="utf-8"), wait_until="load")
                         await page.evaluate("document.fonts.ready")
-                        dimensions = await page.evaluate("""() => ({
-                            width: innerWidth,
-                            documentWidth: document.documentElement.scrollWidth,
-                            height: document.documentElement.scrollHeight,
-                            reportHeight: document.querySelector('.report').getBoundingClientRect().height,
-                            synthetic: document.querySelector('.synthetic')?.textContent,
-                            font: getComputedStyle(document.body).fontFamily
-                        })""")
-                        name = f"{item['name']}-{label}.png"
+                        dimensions = await page.evaluate(r"""() => {
+                            const report = document.querySelector('.report');
+                            const bounds = report.getBoundingClientRect();
+                            const numbers = report.querySelectorAll(
+                                '.metric-number, .report-table td:not(:first-child), .score, .style-list b, ' +
+                                '.compact-line b, .recent-metrics dd, .row-meta .numeric, .summary-metrics dd, ' +
+                                '.comparison-values b, .prediction-values b'
+                            );
+                            const overflowingNumbers = [...numbers].filter(el => {
+                                if (el.clientWidth && el.scrollWidth > el.clientWidth + 1) return true;
+                                const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+                                for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                                    for (const token of node.data.matchAll(/[+-]?\d[\d,.]*%?/g)) {
+                                        const range = document.createRange();
+                                        range.setStart(node, token.index);
+                                        range.setEnd(node, token.index + token[0].length);
+                                        const rects = [...range.getClientRects()];
+                                        if (rects.length !== 1 || rects.some(r => r.left < bounds.left - 1 ||
+                                                r.right > bounds.right + 1)) return true;
+                                    }
+                                }
+                                return false;
+                            }).map(el => el.textContent.trim());
+                            const radar = report.querySelector('.radar');
+                            const frame = radar?.getBoundingClientRect();
+                            const clippedRadarLabels = [...(radar?.querySelectorAll('.radar-label') ?? [])]
+                                .filter(el => {
+                                    const box = el.getBoundingClientRect();
+                                    return box.left < frame.left || box.right > frame.right ||
+                                        box.top < frame.top || box.bottom > frame.bottom;
+                                }).map(el => el.textContent.trim());
+                            return {
+                                width: innerWidth, documentWidth: document.documentElement.scrollWidth,
+                                height: document.documentElement.scrollHeight,
+                                reportWidth: bounds.width, reportHeight: bounds.height,
+                                synthetic: report.querySelector('.synthetic')?.textContent,
+                                font: getComputedStyle(document.body).fontFamily,
+                                overflowingNumbers, clippedRadarLabels
+                            };
+                        }""")
+                        name = f"{item['name']}-{width}.png"
                         await page.locator(".report").screenshot(path=str(OUTPUT / name), animations="disabled")
-                        check = {"image": name, "viewport": label, **dimensions,
+                        check = {"image": name, "viewport": width, **dimensions,
                                  "external_requests": list(requests),
-                                 "passed": dimensions["documentWidth"] <= width and not requests
-                                           and bool(dimensions["synthetic"])}
+                                 "passed": dimensions["reportWidth"] == width and dimensions["documentWidth"] == width
+                                           and not requests and not dimensions["overflowingNumbers"]
+                                           and not dimensions["clippedRadarLabels"] and bool(dimensions["synthetic"])}
+                        if width != PHONE_WIDTH and item["kind"] in {"overview", "recent"}:
+                            chat_image = f"{item['name']}-{width}-chat-{PHONE_WIDTH}.png"
+                            with Image.open(OUTPUT / name) as image:
+                                height = round(image.height * PHONE_WIDTH / image.width)
+                                image.resize((PHONE_WIDTH, height), Image.Resampling.LANCZOS).save(OUTPUT / chat_image)
+                            check["chat_preview"] = chat_image
                         checks.append(check)
                 finally:
                     await context.close()
@@ -199,7 +261,7 @@ def main() -> int:
                 html_name, text_name = name + ".html", name + ".txt"
                 (OUTPUT / html_name).write_text(renderer.template(page), encoding="utf-8")
                 (OUTPUT / text_name).write_text(renderer.text(page), encoding="utf-8")
-                artifacts.append({"name": name, "html": html_name, "text": text_name})
+                artifacts.append({"name": name, "kind": view["kind"], "html": html_name, "text": text_name})
     checks = asyncio.run(screenshots(artifacts)) if args.screenshots else []
     manifest = {
         "synthetic": True, "live_api_used": False,
@@ -209,7 +271,9 @@ def main() -> int:
     }
     (OUTPUT / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     failures = [check["image"] for check in checks if not check["passed"]]
-    print(f"Synthetic previews: {len(artifacts)} HTML/text pairs; {len(checks)} screenshots; {len(failures)} layout/network failures.")
+    chat_count = sum("chat_preview" in check for check in checks)
+    print(f"Synthetic previews: {len(artifacts)} HTML/text pairs; {len(checks)} screenshots; "
+          f"{chat_count} chat-scale previews; {len(failures)} layout/network failures.")
     print(f"Output: {OUTPUT}")
     if failures:
         print("Failed: " + ", ".join(failures))

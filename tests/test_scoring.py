@@ -7,11 +7,12 @@ development (including intermediate roles, AFK/Elo features and trade logs).
 """
 
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
-from models import Match, Participant, parse_match
-from scoring import MODEL, match_prediction, recent_score, score_band, team_composition
+from models import Match, Participant, parse_match, parse_recent
+from scoring import MODEL, match_prediction, profile_rating, recent_score, score_band, team_composition
 
 
 def raw_match():
@@ -265,11 +266,103 @@ def test_color_bands_use_upstream_displayed_score_marks(score, band):
     assert score_band(score) == band
 
 
-def test_bundled_model_has_pinned_source_and_complete_mit_notice_without_titles():
+def profile_sample():
+    # Newest first: short strong win, full-length loss, and a win with an AFK ally.
+    short, loss, afk = (raw_match() for _ in range(3))
+    short["TotalPlayTimeInSec"] = 210
+    short["Data"]["a"].update(DestructionScore=6100, LossesScore=800)
+    short["Data"]["c"]["ObjectivesCaptured"] = 1
+    loss["Data"]["a"].update(NewRating=1880, DestructionScore=350, LossesScore=6500, ObjectivesCaptured=0)
+    loss["Data"]["c"]["ObjectivesCaptured"] = 5
+    afk["Data"]["a"].update(DestructionScore=2300, LossesScore=2000, ObjectivesCaptured=1)
+    afk["Data"]["c"].update(DestructionScore=0, LossesScore=0)
+    return [short, loss, afk]
+
+
+@pytest.mark.parametrize("indices,analysis,expected", [
+    ([0, 1, 2], SUPPORT_ANALYSIS, (1.8, "纯蛆", "low", [30, 49, 56, 75])),
+    ([0], FRONT_ANALYSIS, (7.8, "有龙样", "high", [100, 98, 72, 95])),
+    ([1], {}, (2.0, "有点蛆", "low", [0, 10, 1, 30])),
+])
+def test_profile_matches_pinned_compute_dragon_score(indices, analysis, expected):
+    # In the mixed TS fixture the individual scores are 9.9, 1.1, 5.1, but
+    # the player score is 1.8. Averaging their displayed scores would give 5.4.
+    raws = profile_sample()
+    matches = [parse_match({"matchInfo": raws[i]}, str(i)) for i in indices]
+    before = deepcopy(matches)
+    profile = profile_rating(matches, "a", analysis, 0)
+    score, title, tone, parts = expected
+    assert profile == {
+        "score": score, "title": title, "tone": tone, "sample_size": len(matches),
+        "dimensions": [dict(key=key, label=label, value=value) for key, label, value in zip(
+            ("kd", "contrib", "obj", "outcome", "win_rate"),
+            ("分值 K/D", "摧毁贡献", "占点贡献", "胜负预期", "实际胜率"), [*parts, 0])],
+    }
+    assert matches == before
+
+
+def test_profile_caps_newest_valid_rows_after_normalizing_match_order():
+    short, loss, _ = profile_sample()
+    unrated = deepcopy(short)
+    unrated["Data"]["a"]["NewRating"] = unrated["Data"]["a"]["OldRating"]
+    raws = []
+    for i, raw in enumerate([loss, *([short] * 20), unrated]):
+        start = 1700000000 + i * 3600
+        raws.append({"matchId": str(i), "data": {
+            **raw, "StartTime": start, "EndTime": start + raw["TotalPlayTimeInSec"],
+        }})
+    matches = parse_recent({"matches": raws[::2] + raws[1::2]})
+    assert [m.id for m in matches] == [str(i) for i in range(21, -1, -1)]
+    profile = profile_rating(matches, "a", {}, None)
+    assert (profile["score"], profile["title"], profile["sample_size"]) == (10, "真龙", 20)
+    assert [d["value"] for d in profile["dimensions"]] == [99, 99, 83, 95, None]
+
+
+def test_missing_objectives_omit_only_unobserved_parts_and_never_supply_a_win():
+    short, _, afk = profile_sample()
+    short["Data"]["c"].pop("ObjectivesCaptured")
+    latest = parse_match({"matchInfo": short}, "latest")
+    earlier = parse_match({"matchInfo": afk}, "earlier")
+    single = profile_rating([latest], "a", FRONT_ANALYSIS, None)
+    assert single["score"] == 7.8
+    assert [d["value"] for d in single["dimensions"]] == [100, 98, None, 95, None]
+    # Missing objectives for an inactive ally do not affect the active-team comparison.
+    earlier_obj = profile_rating([earlier], "a", FRONT_ANALYSIS, None)["dimensions"][2]["value"]
+    assert earlier_obj is not None
+    both = profile_rating([latest, earlier], "a", FRONT_ANALYSIS, None)
+    assert both["sample_size"] == 2 and both["dimensions"][2]["value"] == earlier_obj
+    empty = profile_rating([latest], "absent", {}, 100)
+    assert (empty["sample_size"], empty["score"], empty["title"], empty["tone"]) == (0, None, None, None)
+    assert [d["value"] for d in empty["dimensions"]] == [None, None, None, None, 100]
+
+
+def test_profile_distinguishes_explicit_zero_from_unknown_values():
+    raw = raw_match()
+    for player in raw["Data"].values():
+        player.update(DestructionScore=0, LossesScore=0, ObjectivesCaptured=0)
+    zero = profile_rating([normalized(raw)], "a", {}, 0)
+    # The TS oracle still scores the explicit zeros and returns an objective percentile.
+    assert (zero["score"], zero["title"], zero["sample_size"]) == (7.2, "泯然众人", 1)
+    assert [d["value"] for d in zero["dimensions"]] == [61, 58, 54, 86, 0]
+    raw["Data"]["a"].pop("DestructionScore")  # Protobuf omits zero counters.
+    assert profile_rating([normalized(raw)], "a", {}, 0) == zero
+    raw["Data"]["a"].pop("ObjectivesCaptured")
+    missing = profile_rating([normalized(raw)], "a", {}, None)
+    assert missing["score"] == zero["score"]
+    assert [d["value"] for d in missing["dimensions"]] == [61, 58, None, 86, None]
+    raw["Data"]["a"]["DestructionScore"] = None
+    incomplete = profile_rating([normalized(raw)], "a", {}, 0)
+    assert incomplete["score"] is None and incomplete["sample_size"] == 0
+    assert [d["value"] for d in incomplete["dimensions"]] == [None, None, None, None, 0]
+
+
+def test_bundled_model_has_pinned_source_and_complete_mit_notice_without_match_awards():
     source = MODEL["source"]
     assert source["commit"] == "072dc9bc2d73ffc87000c1d3db4c0f9b4dcab549"
     assert source["license"] == "MIT"
+    notice = Path(__file__).resolve().parents[1] / "docs" / "BA_DRAGON_LICENSE.txt"
+    assert source["licenseText"].encode("utf-8") == notice.read_bytes()
     assert "Copyright (c) 2026 AlexanderHYu" in source["licenseText"]
     assert "Copyright (c) 2025-2026 Zola (Zawinzala)" in source["licenseText"]
     assert 'THE SOFTWARE IS PROVIDED "AS IS"' in source["licenseText"]
-    assert not set(MODEL).intersection({"titles", "titleDist", "titleFreq", "tiers", "playerPct", "kalman", "effElo"})
+    assert not set(MODEL).intersection({"titles", "titleDist", "titleFreq", "effElo"})
