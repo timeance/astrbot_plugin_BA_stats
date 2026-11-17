@@ -43,7 +43,7 @@ def extract_arguments(event, prefixes):
     raw = "".join(parts).strip()
     choices = sorted({str(p) for p in prefixes if p}, key=len, reverse=True)
     for prefix in choices + [""]:
-        match = re.match(r"^" + re.escape(prefix) + r"ba(?:\s+|$)", raw, re.IGNORECASE)
+        match = re.match(r"^" + re.escape(prefix) + r"\s*ba(?:\s+|$)", raw, re.IGNORECASE)
         if match:
             return raw[match.end():], mentions
     # Some adapters expose normalized text with command prefixes already removed.
@@ -134,7 +134,7 @@ class BAStatsPlugin(Star):
                   "schema": "响应结构变化", "identity_mismatch": "身份校验失败",
                   "no_data": "暂无收录", "upstream": "上游暂不可用", "queue_full": "队列已满",
                   "not_configured": "接入未配置", "closed": "客户端已关闭", "daily_quota": "每日额度已用完"}
-        return (f"断箭战报 v0.1.0\n接入配置：{'已填写（不代表联调通过）' if status['configured'] else '未配置'}\n"
+        return (f"断箭战报 v0.1.1\n接入配置：{'已填写（不代表联调通过）' if status['configured'] else '未配置'}\n"
                 f"今日总请求：{usage['global']}/{GLOBAL_DAILY_LIMIT}（固定上限）；北京时间 0 点重置\n"
                 f"本次运行请求：{status['requests']}；进行中：{status['inflight']}\n"
                 f"API 缓存：{await self.storage.cache_count()} 条；命中：{status['cache_hits']}；旧缓存：{status['stale_hits']}\n"
@@ -157,20 +157,35 @@ class BAStatsPlugin(Star):
                       "按实际发出的上游 HTTP 请求计数（含重试与失败）；命中缓存、本地命令及图片渲染不计入。"])
         return "\n".join(lines)
 
+    def _response_result(self, event, response, config):
+        parts = [Plain(response.text)] if response.text else []
+        private_prefix = ""
+        if not event.get_group_id() and config.get("platform_settings", {}).get("friend_message_needs_wake_prefix", False):
+            prefixes = config.get("wake_prefix", [])
+            private_prefix = str(prefixes[0]) if prefixes else ""
+        for label, command in response.instructions:
+            parts.append(Plain("\n" + label))
+            if event.get_group_id():
+                # QQ resolves this real mention to the bot's current group card/name.
+                parts.extend([At(qq=event.get_self_id()), Plain(" " + command)])
+            else:
+                parts.append(Plain((private_prefix + " " if private_prefix else "") + command))
+        # Instructions must remain copyable, and At components must stay interactive.
+        return event.chain_result(parts).use_t2i(False)
+
     @filter.command("ba", alias={"BA", "Ba", "bA"})
     async def ba(self, event: AstrMessageEvent):
         if self._closed:
             return
         event.stop_event()
-        config = self.context.get_config(event.unified_msg_origin)
-        prefixes = config.get("wake_prefix", ["/"]) if config is not None else ["/"]
-        prefix = str(prefixes[0]) if prefixes else ""
+        config = self.context.get_config(event.unified_msg_origin) or {}
+        prefixes = config.get("wake_prefix", ["/"])
         try:
             text, mentions = extract_arguments(event, prefixes)
             request = parse_command(text, mentions, self.settings.default_limit,
                                     self.settings.max_limit, self.settings.chinese_aliases)
             caller = Caller(str(event.get_platform_id()), event.unified_msg_origin,
-                            str(event.get_sender_id()), prefix + "ba")
+                            str(event.get_sender_id()))
             if request.action == "quota":
                 yield event.plain_result(await self._quota(quota_actor(event)))
                 return
@@ -191,18 +206,33 @@ class BAStatsPlugin(Star):
             with self.client.request_scope(quota_actor(event)):
                 response = await self._run(self.service.execute(request, caller))
             if response.text:
-                yield event.plain_result(response.text)
+                yield self._response_result(event, response, config)
             if response.view is not None:
+                send_images = self.settings.image_enabled
                 for view in self.renderer.views(response.view):
-                    if self.settings.image_enabled:
+                    send_uncertain = False
+                    if send_images:
                         try:
                             path = await self._run(self._image(view, event.unified_msg_origin))
-                        except (Exception,):
+                        except Exception:
                             self.logger.warning("断箭战报图片渲染失败，已使用相同查询结果回复文字。")
                         else:
-                            yield event.image_result(path)
-                            continue
-                    yield event.plain_result(self.renderer.text(view))
+                            try:
+                                # Await the transport here: errors from yielded results
+                                # are otherwise swallowed later by AstrBot's pipeline.
+                                await self._run(event.send(event.image_result(path)))
+                            except Exception as exc:
+                                self.logger.warning("断箭战报图片发送未获成功确认（%s），改发文字。", type(exc).__name__)
+                                send_uncertain = True
+                            else:
+                                continue
+                        send_images = False
+                    text = self.renderer.text(view)
+                    if send_uncertain:
+                        text = "图片发送未获成功确认，以下为文字战报：\n" + text
+                    # Prevent the host's global T2I setting from turning fallback
+                    # text into another image sent through the same failing path.
+                    yield event.plain_result(text).use_t2i(False)
         except (ClientError, ValueError) as exc:
             yield event.plain_result(str(exc))
         except asyncio.TimeoutError:
