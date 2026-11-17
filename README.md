@@ -4,7 +4,7 @@
 
 AstrBot 原生《断箭》（Broken Arrow）战绩查询插件。以简洁排版展示玩家概览、近期战绩与单局核心数据，支持图片战报和默认账号绑定，不依赖大模型。
 
-近期战绩提供彩色评分；单局战报包含赛前预测、双方对比、兵种构成和玩家数据。
+用 `ba me` 查看综合评分、称号和五维雷达图。图中的「胜负预期」衡量近期战果相对赛前预期的表现；「实际胜率」是近期已知胜负对局中获胜的比例。`ba recent` 查看逐局评分，`ba last` 查看最近一局的赛前预测、双方对比和玩家数据。
 
 > 数据来源 [BATrace](https://dash.batrace.top/)，如有帮助请支持该平台。更新内容见 [更新日志](CHANGELOG.md)。
 
@@ -89,7 +89,7 @@ ba stats @群友
 
 - 运行要求：AstrBot **4.29.4 及以上**，QQ（OneBot v11）；详细测试与验证记录见 [验证记录](docs/VALIDATION.md)。
 - 开源协议：项目采用 **Apache-2.0**；`scoring.py` 的 ba-dragon 移植部分及 `assets/scoring-model.json` 保留上游 **MIT** 许可，完整文本见 [ba-dragon 许可](docs/BA_DRAGON_LICENSE.txt)。
-- 致谢与参考：[BATrace](https://dash.batrace.top/)（战绩数据源）、[AlexanderHYu/ba-dragon](https://github.com/AlexanderHYu/ba-dragon)（逐局评分模型及接口参考）、[benx1n/wows-stats-bot](https://github.com/benx1n/wows-stats-bot)、[timeance/astrbot_plugin_openai_native](https://github.com/timeance/astrbot_plugin_openai_native)、AstrBot（详见 [第三方说明](docs/THIRD_PARTY.md)）。
+- 致谢与参考：[BATrace](https://dash.batrace.top/)（战绩数据源）、[AlexanderHYu/ba-dragon](https://github.com/AlexanderHYu/ba-dragon)（评分模型及接口参考）、[benx1n/wows-stats-bot](https://github.com/benx1n/wows-stats-bot)、[timeance/astrbot_plugin_openai_native](https://github.com/timeance/astrbot_plugin_openai_native)、AstrBot（详见 [第三方说明](docs/THIRD_PARTY.md)）。
 
 ```sh
 python -m pip install -r requirements-dev.txt

@@ -1,7 +1,34 @@
 {% extends "base.html" %}
+{% block identity %}
+<div class="identity-player"><h1>{{ view.player.name }}</h1>
+  <p class="identity-meta">玩家 ID：{{ view.player.id }}</p></div>
+<div class="profile-grade">
+  <span class="metric-label">综合评分</span>
+  <strong class="score {{ view.profile_rating.tone }}{% if view.profile_rating.score == '暂无' %} is-missing{% endif %}">{{ view.profile_rating.score }}</strong>
+  {% if view.profile_rating.title %}<span class="grade-title">{{ view.profile_rating.title }}</span>{% endif %}
+</div>
+{% endblock %}
 {% block content %}
-{% if view.analysis_scope %}<p class="scope">{{ view.analysis_scope }}</p>{% endif %}
-{% if view.categories %}<p class="compact-line">{% for c in view.categories %}<span>{{ c.name }} {{ c.percentage }}%</span>{% endfor %}</p>{% endif %}
+{% set rating = view.profile_rating %}
+<section aria-labelledby="radar-heading">
+  <div class="radar-heading"><h2 id="radar-heading">五维表现</h2><span class="metric-label">刻度 0–100</span></div>
+  <svg class="radar" viewBox="0 0 360 211" role="img" aria-labelledby="radar-title radar-values">
+    <title id="radar-title">玩家五维表现</title>
+    <desc id="radar-values">{% for axis in rating.axes %}{{ axis.label }} {{ axis.display }}{% if not loop.last %}，{% endif %}{% endfor %}</desc>
+    <g class="radar-grid">{% for ring in rating.rings %}<polygon points="{{ ring }}"/>{% endfor %}
+      {% for axis in rating.axes %}<polyline points="{{ axis.line }}"/>{% endfor %}</g>
+    {% if rating.polygon %}<polygon class="radar-area" points="{{ rating.polygon }}"/>{% endif %}
+    {% for axis in rating.axes %}
+      {% if axis.point is not none %}<circle class="radar-dot" cx="{{ '%.2f'|format(axis.point[0]) }}" cy="{{ '%.2f'|format(axis.point[1]) }}" r="3.5"/>{% endif %}
+      <text class="radar-label" x="{{ axis.x }}" y="{{ axis.y }}" text-anchor="{{ axis.anchor }}">{{ axis.label }}<tspan class="radar-value" x="{{ axis.x }}" dy="20">{{ axis.display }}</tspan></text>
+    {% endfor %}
+  </svg>
+</section>
+{% if view.categories or view.style_scope %}
+<section><h2 class="section-heading">{{ view.style_scope or '兵种风格' }}</h2>
+  {% if view.categories %}<ul class="style-list">{% for c in view.categories %}<li>{{ c.name }} <b>{{ c.percentage }}</b></li>{% endfor %}</ul>
+  {% else %}<p class="metric-label">暂无</p>{% endif %}
+</section>{% endif %}
 {% if view.common_units %}
 <section aria-label="常用单位">
   <h2 class="section-heading">常用单位</h2>

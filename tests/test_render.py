@@ -71,7 +71,7 @@ def test_identity_scope_precision_and_same_text_values(view, theme):
     text = renderer.text(view)
     for value in [
         "00076561198012345678", "合成样本玩家", view["scope"],
-        "62.50%", "8场", "1.23", "2.79", "合成样本",
+        "62.5%", "8场", "1.23", "2.79", "合成样本",
     ]:
         assert compact(value) in compact(visible)
         assert compact(value) in compact(text)
@@ -142,9 +142,8 @@ def test_safe_http_links_are_escaped_not_loaded(view):
 def test_missing_metric_is_unknown_without_fake_zero_or_unit(view, value):
     view["metrics"] = [{"label": "ELO", "value": value, "unit": "分"}]
     renderer = Renderer()
-    assert "ELO：暂无" in renderer.text(view)
-    assert "暂无分" not in compact(VisibleHTML(renderer.template(view)).text)
-    assert "0.00" not in renderer.text(view)
+    assert "ELO：暂无" in renderer.text(view).splitlines()
+    assert re.findall(r'<p class="metric-number">(.*?)</p>', renderer.template(view), re.S) == ["暂无"]
 
 
 def test_real_zero_and_unknown_stay_distinct(view):
@@ -159,7 +158,7 @@ def test_real_zero_and_unknown_stay_distinct(view):
     assert "分值 K/D 暂无" in text
     assert "胜负暂无" in text
     assert "0分00秒" in text
-    assert "ELO +0.00" in text
+    assert "ELO +0" in text
 
 
 def test_exchange_values_are_separate_and_not_recalculated(view):
@@ -170,7 +169,7 @@ def test_exchange_values_are_separate_and_not_recalculated(view):
     renderer = Renderer()
     html_text = compact(VisibleHTML(renderer.template(view)).text)
     text = renderer.text(view)
-    for expected in ["击杀 / 阵亡 8 / 2", "摧毁 / 损失 2500.50 / 2000.75", "分值 K/D 1.25"]:
+    for expected in ["击杀 / 阵亡 8 / 2", "摧毁 / 损失 2,500.5 / 2,000.75", "分值 K/D 1.25"]:
         assert expected in text
         assert compact(expected.replace("：", "")) in html_text
 
@@ -265,13 +264,53 @@ def test_fresh_report_omits_empty_sections_and_repeated_provenance(view):
 
 
 def test_analysis_units_maps_and_categories_share_values(view):
-    view.update(analysis_scope="分析样本 100 场", categories=[{"name": "固定翼", "percentage": 31}],
+    view.update(style_scope="近83场风格", categories=[{"name": "固定翼", "percentage": 31},
+                                                     {"name": "防空", "percentage": None}],
                 common_units=[{"name": "Tu-95", "count": 72, "damage": 11683, "roi": 1.62}],
-                map_stats=[{"name": "Coast", "count": 8, "win_rate": 50}])
+                map_stats=[{"name": "Coast", "count": 8, "win_rate": 50},
+                           {"name": "Other", "count": 0, "win_rate": None}])
+    view["metrics"].append({"label": "单局伤害交换比", "value": 1.3})
     renderer = Renderer()
     for output in (renderer.text(view), VisibleHTML(renderer.template(view)).text):
-        for value in ("分析样本 100 场", "固定翼", "31%", "Tu-95", "72", "11683", "1.62", "Coast", "50%"):
+        for value in ("近83场风格", "固定翼 31%", "防空 暂无", "Tu-95", "72", "11,683", "1.62", "Coast", "50%",
+                      "Other", "单局伤害交换比"):
             assert compact(value) in compact(output)
+        assert "暂无%" not in compact(output)
+
+
+@pytest.fixture
+def profile():
+    return {"score": 5.8, "title": "泯然众人", "tone": "medium", "sample_size": 4,
+            "dimensions": [{"key": key, "value": value}
+                           for key, value in (("win_rate", 0), ("outcome", 71), ("obj", 16),
+                                              ("contrib", 59), ("kd", 37))]}
+
+
+@pytest.mark.parametrize("kind", ["overview", "recent", "match"])
+def test_title_and_five_distinct_axes_belong_only_to_overview(view, profile, kind):
+    view.update(kind=kind, profile_rating=profile, rows=[{"id": "42", "title": profile["title"], "score": 5.8}])
+    renderer = Renderer()
+    parsed = VisibleHTML(renderer.template(view))
+    for output in (parsed.text, renderer.text(view)):
+        for value in ("泯然众人", "五维表现", "分值 K/D 37", "摧毁贡献 59", "占点贡献 16", "胜负预期 71", "实际胜率 0%"):
+            assert (compact(value) in compact(output)) == (kind == "overview")
+    assert sum(attrs.get("class") == "radar-area" for _, attrs in parsed.tags) == (kind == "overview")
+    assert sum(attrs.get("class") == "radar-dot" for _, attrs in parsed.tags) == (5 if kind == "overview" else 0)
+
+
+@pytest.mark.parametrize("value", [None, float("nan"), -1, 101])
+def test_missing_radar_axis_keeps_real_zero_without_filling_polygon(view, profile, value):
+    profile["dimensions"][1]["value"] = value
+    profile["score"] = None
+    view["profile_rating"] = profile
+    renderer = Renderer()
+    parsed = VisibleHTML(renderer.template(view))
+    for output in (parsed.text, renderer.text(view)):
+        assert "综合评分暂无" in compact(output)
+        assert "胜负预期暂无" in compact(output) and "实际胜率0%" in compact(output)
+        assert profile["title"] not in output
+    assert not any(attrs.get("class") == "radar-area" for _, attrs in parsed.tags)
+    assert sum(attrs.get("class") == "radar-dot" for _, attrs in parsed.tags) == 4
 
 
 def test_recent_score_precedes_match_and_has_color_without_title(view):

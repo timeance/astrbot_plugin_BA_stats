@@ -83,7 +83,11 @@ SteamID64 与 STB ID 均保持字符串；**未找到可靠的 Steam→STB 映�
 
 ## 评分、预测与战报展示
 
-`scoring.py` 使用 `assets/scoring-model.json`，移植 ba-dragon 固定提交的逐局评分逻辑与参数。近期战绩首列统一命名「评分」，按分数段着色，不显示称号。缺少必要数据时返回 `None` 并显示「暂无」，不补零。它与来源 ELO 分别展示，不是完整生涯评价，也不引入时间线或 Kalman 聚合算法。
+`scoring.py` 使用 `assets/scoring-model.json`，移植 ba-dragon 固定提交的 `computeDragonScore`。近期战绩使用逐局分，不显示称号；玩家概览接收按时间从新到旧排列的对局，先跳过无效局，再取最多 20 场，将逐局标准分从旧到新输入 Kalman 滤波器，短局权重较低。再查 `playerPct` 得到 1–10 综合分，按显示分数及 `tiers` 给出称号；它不是单局显示分的平均值。1 场有效对局也可评分，`sample_size` 保留实际场数；0 场时综合分、称号和前四维均为 `None`。
+
+五个雷达值均为 0–100。分值 K/D、摧毁贡献、占点贡献分别表示相对同条件玩家的表现百分位；占点不计入综合分。「胜负预期」是逐局 `phi((S-E)/outSd)` 的平均表现：`S` 采用上游模型内部的排位 ELO 涨跌，`E` 由双方赛前 ELO 和其他挂机者修正得出。前四项均按可用分项取平均后四舍五入为百分制整数。与上游缺失值回退不同，插件在缺少本人或在线队友占点时跳过该局的占点轴，缺少任何参战者所需的 ELO 或摧毁/损失价值时跳过整局。已归一化的真实零仍参与计算。
+
+第五维 `win_rate` 由服务层传入，仅统计近期样本中目标玩家有明确布尔 `won` 的对局。没有已知赛果时为 `None`，已知赛果全部为负时为 `0`；即使没有有效评分局，也可独立提供该轴。两种胜负指标不互相填补，评分本身不触发网络请求。
 
 `ba last` 的单局图片顶部展示基于双方赛前 ELO 的赛前预测及双队摘要；中部左侧兵种构成、右侧双方对比；底部展示队伍玩家数据。摘要区分赛前平均 ELO（`OldRating`）与赛后平均 ELO（`NewRating`）。预测是模型估算，不表示实际赛果。兵种构成按模型的单位角色与基础价格估算出动花费，缺少单位价格或记录时保留不完整说明，不冒充实际结算。
 
@@ -194,4 +198,4 @@ AstrBot 适配器从事件的 `get_platform_id()/get_sender_id()/get_group_id()`
 
 该提交的 ba-dragon 主源码为 MIT，LICENSE 载明 AlexanderHYu 与沿用部分的 Zola 版权；其 README 另外说明可选录像使用 GPL FFmpeg。
 Python 请求调度、数据模型和业务适配由本插件实现；`scoring.py` 的移植部分与 `assets/scoring-model.json` 使用 ba-dragon 的 MIT 评分逻辑和模型参数，并保留其来源与版权。未引入录像工具或 FFmpeg。
-完整上游许可原样保留于 [BA_DRAGON_LICENSE.txt](BA_DRAGON_LICENSE.txt)，安装、源码与 Gemini 包均随附。本仓库根 `LICENSE` 继续为 Apache-2.0；具体第三方来源与移植范围见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+完整上游许可原样保留于 [BA_DRAGON_LICENSE.txt](BA_DRAGON_LICENSE.txt) 和模型的 `source.licenseText`。本仓库根 `LICENSE` 继续为 Apache-2.0；分发时的许可保留要求、具体来源与移植范围见 [THIRD_PARTY.md](THIRD_PARTY.md)。

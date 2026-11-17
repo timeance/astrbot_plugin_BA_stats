@@ -1,11 +1,10 @@
-"""Per-match scoring adapted from ba-dragon, under the MIT license.
+"""Match and player scoring adapted from ba-dragon, under the MIT license.
 
 Copyright (c) 2026 AlexanderHYu
 Copyright (c) 2025-2026 Zola (Zawinzala)
 Full original copyright, license and pinned source paths are bundled in
-assets/scoring-model.json. Only computeDragonScore's individual career rows
-are reproduced: no player aggregate, titles, or timeline. Missing career
-composition uses the upstream avgRoles fallback; missing match inputs do not.
+assets/scoring-model.json. Both reports use computeDragonScore's career
+observations; only the player overview aggregates them into a score and tier.
 """
 
 from __future__ import annotations
@@ -25,6 +24,10 @@ except ImportError:  # Standalone tests use the repository as their import root.
 MODEL = json.loads((Path(__file__).parent / "assets" / "scoring-model.json").read_text(encoding="utf-8"))
 ROLE_KEYS = ("armor", "inf", "recon", "arty", "aa", "heli", "jet")
 CAT_KEYS = ("recon", "infantry", "vehicles", "support", "logistic", "helicopters", "aircrafts")
+_PROFILE_AXES = (("kd", "分值 K/D"), ("contrib", "摧毁贡献"), ("obj", "占点贡献"),
+                 ("outcome", "胜负预期"), ("win_rate", "实际胜率"))
+_PROFILE_TIERS = {"dragon": ("真龙", "high"), "solid": ("有龙样", "high"),
+                  "average": ("泯然众人", "medium"), "weak": ("有点蛆", "low"), "qu": ("纯蛆", "low")}
 ROLE_NAMES = {"armor": "装甲", "inf": "步兵", "recon": "侦察", "arty": "炮兵",
               "aa": "防空", "heli": "直升机", "jet": "固定翼", "_": "后勤/运输"}
 # score.ts TRADE and TRADE_NORM, unchanged from the pinned source.
@@ -177,17 +180,17 @@ def _match_features(match: Match, me: Participant, trade: tuple[float, float]) -
     dw, lw = me.destroyed_value * kill, me.lost_value * loss
     avg_dw = sum(p.destroyed_value * (kill if p.player_id == me.player_id else 1)
                  for p in active_team) / len(active_team)
-    # The pinned model gives objectives zero weight; retain upstream zero
-    # handling without treating a missing displayed objective as an observation.
-    if MODEL["weights"]["obj"] and any(not _nonnegative(p.objectives) for p in players):
+    obj = None
+    if all(_nonnegative(p.objectives) for p in active_team):
+        avg_obj = sum(p.objectives for p in active_team) / len(active_team)
+        obj = math.log2((me.objectives + 1) / (avg_obj + 1))
+    elif MODEL["weights"]["obj"]:
         return None
-    objectives = me.objectives or 0
-    avg_objectives = sum(p.objectives or 0 for p in active_team) / len(active_team)
     return {"eloN": (old - 2100) / 400, "gapN": (old - average(players)) / 400,
             "S": 1 if me.elo > old else 0, "E": expected,
             "x": {"kd": math.log2((dw + 200) / (lw + 200)),
                   "con": math.log2((dw + 200) / (avg_dw + 200)),
-                  "obj": math.log2((objectives + 1) / (avg_objectives + 1))}}
+                  "obj": obj}}
 
 
 def _percentile(value: float, quantiles: list[float]) -> float:
@@ -213,14 +216,43 @@ def _to10(percentile: float) -> float:
     return math.floor((1 + 9 * percentile) * 10 + 0.5) / 10
 
 
-def recent_score(match: Match, participant: Participant, analysis: Mapping | None) -> float | None:
-    """Return the exact individual computeDragonScore career-row score, 1..10.
+def _phi(z: float) -> float:
+    """score.ts uses this normal CDF approximation for the outcome percentile."""
+    t = 1 / (1 + 0.2316419 * abs(z))
+    d = 0.3989423 * math.exp(-z * z / 2)
+    p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))))
+    return 1 - p if z > 0 else p
 
-    Career categories with missing spend or highlight category/cost return None.
-    Empty career composition uses MODEL.avgRoles, exactly as upstream does.
-    UnitData affects the upstream AFK detector but never replaces career roles
-    or supplies per-unit trade multipliers here. Teammates use multiplier 1.
-    """
+
+def _career_performance(features: dict, roles: Mapping) -> tuple[float, dict]:
+    norms, weights = MODEL["norm"]["career"], MODEL["weights"]
+    z = {}
+    for metric, observation in features["x"].items():
+        if observation is None:
+            continue
+        norm = norms[metric]
+        mu = norm["elo"] * features["eloN"] + norm["gap"] * features["gapN"]
+        variance = 0.0
+        for role in ROLE_KEYS:
+            mu += roles[role] * norm["mu"][role]
+            variance += roles[role] * norm["sigma"][role] ** 2
+        z[metric] = (observation - mu) / math.sqrt(variance or 1)
+    obj_factor = sum(roles[r] for r in ("armor", "inf", "recon"))
+    obj_factor += 0.2 * sum(roles[r] for r in ("arty", "aa", "heli", "jet"))
+    stat = weights["kd"] * z["kd"] + weights["con"] * z["con"]
+    if weights["obj"]:
+        stat += weights["obj"] * obj_factor * z["obj"]
+    stat /= weights["kd"] + weights["con"] + weights["obj"] * obj_factor
+    out = (features["S"] - features["E"]) / MODEL["outSd"]
+    parts = {key: _percentile(z[k], norms[k]["q"]) for k, key in
+             (("kd", "kd"), ("con", "contrib"), ("obj", "obj")) if k in z}
+    if weights["out"]:
+        parts["outcome"] = _phi(out)
+    return stat + weights["out"] * out, parts
+
+
+def recent_score(match: Match, participant: Participant, analysis: Mapping | None) -> float | None:
+    """Return the individual computeDragonScore career-row score, 1..10."""
     me = next((p for p in match.players if p.player_id == participant.player_id), None)
     if me is None or (analysis is not None and not isinstance(analysis, Mapping)):
         return None
@@ -230,23 +262,52 @@ def recent_score(match: Match, participant: Participant, analysis: Mapping | Non
     features = _match_features(match, me, _career_trade(roles))
     if features is None:
         return None
-    norms, weights = MODEL["norm"]["career"], MODEL["weights"]
-    z = {}
-    for metric in ("kd", "con", "obj"):
-        norm = norms[metric]
-        mu = norm["elo"] * features["eloN"] + norm["gap"] * features["gapN"]
-        variance = 0.0
-        for role in ROLE_KEYS:
-            mu += roles[role] * norm["mu"][role]
-            variance += roles[role] * norm["sigma"][role] ** 2
-        z[metric] = (features["x"][metric] - mu) / math.sqrt(variance or 1)
-    obj_factor = sum(roles[r] for r in ("armor", "inf", "recon"))
-    obj_factor += 0.2 * sum(roles[r] for r in ("arty", "aa", "heli", "jet"))
-    stat = (weights["kd"] * z["kd"] + weights["con"] * z["con"]
-            + weights["obj"] * obj_factor * z["obj"])
-    stat /= weights["kd"] + weights["con"] + weights["obj"] * obj_factor
-    combined = stat + weights["out"] * (features["S"] - features["E"]) / MODEL["outSd"]
+    combined, _ = _career_performance(features, roles)
     return _to10(_percentile(combined, MODEL["matchPct"]["career"]))
+
+
+def profile_rating(matches: list[Match], player_id: str, analysis: Mapping | None,
+                   win_rate: float | None) -> dict:
+    """Aggregate up to 20 valid recent rows. Input matches are newest first.
+
+    The caller supplies the independent observed win percentage from explicit
+    analysis won records. The model's Elo-derived S never supplies this axis.
+    """
+    roles = _career_roles(analysis) if analysis is None or isinstance(analysis, Mapping) else None
+    observations = []
+    if roles is not None:
+        trade = _career_trade(roles)
+        for match in matches:
+            me = next((p for p in match.players if p.player_id == player_id), None)
+            features = _match_features(match, me, trade) if me is not None else None
+            if features is None:
+                continue
+            combined, parts = _career_performance(features, roles)
+            observations.append((combined, (match.duration_seconds or 0) / 60, parts))
+            if len(observations) == 20:
+                break
+
+    score = title = tone = None
+    axes = {"win_rate": win_rate if _finite(win_rate) and 0 <= win_rate <= 100 else None}
+    if observations:
+        k = MODEL["kalman"]
+        mean, variance = 0.0, k["P0"]
+        for combined, minutes, _ in reversed(observations):
+            variance += k["q"]
+            noise = k["r"] / min(1, max(0.3, minutes / k["shortMin"]))
+            gain = variance / (variance + noise)
+            mean += gain * (combined - mean)
+            variance *= 1 - gain
+        score = _to10(_percentile(mean, MODEL["playerPct"]))
+        tier = next(t for threshold, t in MODEL["tiers"] if score >= _to10(threshold))
+        title, tone = _PROFILE_TIERS[tier]
+        for key, _ in _PROFILE_AXES[:-1]:
+            values = [parts[key] for _, _, parts in observations if key in parts]
+            if values:
+                axes[key] = math.floor(sum(values) / len(values) * 100 + 0.5)
+    return {"score": score, "title": title, "tone": tone, "sample_size": len(observations),
+            "dimensions": [{"key": key, "label": label, "value": axes.get(key)}
+                           for key, label in _PROFILE_AXES]}
 
 
 def score_band(score: float | None) -> Literal["low", "medium", "high"] | None:

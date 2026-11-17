@@ -12,8 +12,12 @@ from .client import participant_for
 from .commands import Request, Target
 from .models import FetchResult, Match, Participant, Player
 from .pending import PendingManager
-from .scoring import match_prediction, recent_score, score_band, team_composition
+from .scoring import match_prediction, profile_rating, recent_score, score_band, team_composition
 from .storage import Binding
+
+
+CATEGORY_NAMES = {"recon": "侦察", "infantry": "步兵", "vehicles": "载具", "support": "支援",
+                  "logistic": "后勤", "helicopters": "直升机", "aircrafts": "固定翼"}
 
 
 @dataclass(frozen=True)
@@ -82,7 +86,7 @@ def map_name(match, player=None):
     return match.map_name
 
 
-def recent_rows(matches, player_id, player=None):
+def recent_rows(matches, player_id, player=None, *, with_scores=True):
     rows = []
     outcomes = analysis_outcomes(player) if player is not None and player.id == player_id else {}
     for match in matches:
@@ -90,13 +94,14 @@ def recent_rows(matches, player_id, player=None):
         if person is None:
             continue
         row = participant_view(person)
-        score = recent_score(match, person, player.analysis if player is not None and player.id == player_id else None)
+        if with_scores:
+            score = recent_score(match, person, player.analysis if player is not None and player.id == player_id else None)
+            row.update(score=score, score_band=score_band(score))
         outcome = outcomes.get(match.id, person.outcome)
         row.update(id=match.id, started_at=match.started_at, ended_at=match.ended_at,
                    map_name=map_name(match, player),
                    mode=match.mode, outcome=outcome,
                    outcome_source="analysis" if outcomes.get(match.id) in {"win", "loss"} else None,
-                   score=score, score_band=score_band(score),
                    duration_seconds=match.duration_seconds, source_url=match.source_url)
         rows.append(row)
     return rows
@@ -200,17 +205,13 @@ def overview_metrics(player, rows):
     known = [point["won"] for point in points if isinstance(point.get("won"), bool)]
     dated = [point for point in points if point.get("endTime") is not None and point.get("dmr") is not None]
     latest = max(dated, key=lambda point: point["endTime"]) if dated else None
-    dmr_note = "分析单局"
-    if latest is not None:
-        dmr_note += f" · #{latest['matchId']}" if latest.get("matchId") is not None else ""
     return [
         {"label": "ELO", "value": player.elo},
         {"label": "近期分值 K/D", "value": ratio(sum(row["destroyed_value"] for row in pairs),
-                                                    sum(row["lost_value"] for row in pairs)) if pairs else None,
-         "note": f"近期 {len(pairs)} 场摧毁分 ÷ 损失分"},
+                                                   sum(row["lost_value"] for row in pairs)) if pairs else None},
         {"label": "分析样本胜率", "value": 100 * sum(known) / len(known) if known else None,
-         "format": "percent", "note": f"{sum(known)} 胜 / {len(known)} 场已知结果"},
-        {"label": "伤害交换比", "value": latest["dmr"] if latest else None, "note": dmr_note},
+         "format": "percent"},
+        {"label": "单局伤害交换比", "value": latest["dmr"] if latest else None},
     ]
 
 
@@ -390,15 +391,11 @@ STB ID：{binding.player_id}
                 view.update(freshness(player_result, result, detail))
                 return Response(view=view)
             return Response(f"{player.name} · STB ID：{player.id}\n当前返回样本中暂无可用单局战报。\n{player.source_url or ''}")
-        rows = recent_rows(matches, player.id, player)
+        rows = recent_rows(matches, player.id, player, with_scores=request.action == "recent")
         times = [m.started_at for m in matches if m.started_at and any(p.player_id == player.id for p in m.players)]
         scope = f"近期{len(rows)}场"
-        analysis_count = player.analysis.get("matchCount")
-        if analysis_count is None:
-            analysis_count = len(player.analysis.get("trend", {}).get("points", []))
         view = {"kind": "recent" if request.action == "recent" else "overview",
                 "player": asdict(player), "rows": rows, "scope": scope,
-                "analysis_scope": f"分析样本{analysis_count}场 · 与近期样本独立" if player.analysis else "",
                 "source_url": player.source_url, **freshness(player_result, result)}
         if times:
             from zoneinfo import ZoneInfo
@@ -407,12 +404,21 @@ STB ID：{binding.player_id}
             if len(times) != len(rows):
                 view["scope"] += f"（{len(times)}/{len(rows)} 场有开始时间）"
         if view["kind"] == "overview":
+            # The profile uses recent matches; the metric grid retains the full analysis sample.
+            results = [r["outcome"] for r in rows[:20] if r["outcome_source"] == "analysis"]
+            win_rate = 100 * results.count("win") / len(results) if results else None
+            view["profile_rating"] = profile_rating(matches, player.id, player.analysis, win_rate)
             view["metrics"] = overview_metrics(player, rows)
             view["common_units"] = common_units(player, matches)
             view["map_stats"] = [{"name": m["mapName"] or f"地图#{m['mapId']}",
                                   "count": m["matchCount"], "win_rate": m["winRate"]}
                                  for m in player.analysis.get("mapPerformance", [])[:5]]
-            view["categories"] = [{"name": c["categoryKey"], "percentage": c["percentage"]}
+            analysis_count = player.analysis.get("matchCount")
+            if analysis_count is None:
+                analysis_count = len(player.analysis.get("trend", {}).get("points", []))
+            view["style_scope"] = f"近{analysis_count}场风格" if player.analysis else ""
+            view["categories"] = [{"name": CATEGORY_NAMES.get(c["categoryKey"], c["categoryKey"]),
+                                   "percentage": c["percentage"]}
                                   for c in player.analysis.get("categoryPreferences", [])]
         return Response(view=view)
 

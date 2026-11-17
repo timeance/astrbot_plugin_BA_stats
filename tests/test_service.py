@@ -473,9 +473,8 @@ async def test_overview_uses_actual_sample_and_known_outcomes_only(h):
     assert len(view["rows"]) == 3
     assert [row["outcome"] for row in view["rows"]] == ["win", "loss", "unknown"]
     assert metrics["分析样本胜率"]["value"] == 50
-    assert "2 场已知结果" in metrics["分析样本胜率"]["note"]
     assert view["scope"] == "近期3场"
-    assert view["analysis_scope"] == "分析样本30场 · 与近期样本独立"
+    assert view["style_scope"] == "近30场风格"
     assert view["stale"] is True
 
 
