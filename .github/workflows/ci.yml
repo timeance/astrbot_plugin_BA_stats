@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install development dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Check dependency compatibility
+        run: python -m pip check
+      - name: Check plugin metadata
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          metadata = yaml.safe_load(Path('metadata.yaml').read_text(encoding='utf-8'))
+          for key in ('name', 'display_name', 'desc', 'version', 'author', 'repo'):
+              assert isinstance(metadata[key], str) and metadata[key].strip(), key
+          assert Path('README.md').is_file()
+          assert Path('logo.png').is_file()
+          assert Path('assets/readme-logo.png').is_file()
+          PY
+      - name: Check Python syntax
+        run: python -m compileall -q .
