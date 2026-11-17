@@ -5,10 +5,9 @@
 <ol class="recent-list">
   {% for row in view.rows %}
   <li class="recent-card">
-    <div class="row-heading"><h3>{{ row.map_name }}</h3>{{ outcome(row.outcome) }}</div>
-    <div class="row-meta"><span>时间：{{ row.started_at }}</span><span>模式：{{ row.mode }}</span><span>时长：{{ row.duration }}</span><span>ELO 变化：{{ row.elo_delta }}</span></div>
-    {{ exchange(row.exchange) }}
-    <p class="row-id">对局 ID：{{ row.id }}{% if row.source_url %} · <a href="{{ row.source_url }}" rel="noreferrer noopener">对局来源：{{ row.source_url }}</a>{% endif %}</p>
+    <div class="row-heading"><span class="score {{ row.score_band }}"><small>评分</small>{{ row.score }}</span><h3>{{ row.map_name }}</h3>{{ outcome(row.outcome) }}</div>
+    <div class="row-meta"><span>#{{ row.id }}</span>{% if row.duration != '暂无' %}<span>{{ row.duration }}</span>{% endif %}{% if row.elo_delta != '暂无' %}<span>ELO {{ row.elo_delta }}</span>{% endif %}</div>
+    <div class="compact-line">{% for metric in row.exchange %}<span>{{ metric.label }} <b>{{ metric.display }}</b></span>{% endfor %}</div>
   </li>
   {% endfor %}
 </ol>

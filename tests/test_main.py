@@ -7,8 +7,10 @@ Plain/At and event methods follow the adapter's actual framework interfaces.
 import asyncio
 from contextlib import nullcontext
 from dataclasses import dataclass
+from html.parser import HTMLParser
 import importlib
 import inspect
+from io import BytesIO
 import json
 import logging
 from pathlib import Path
@@ -16,6 +18,7 @@ import sys
 from types import ModuleType, SimpleNamespace
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
+from zipfile import ZipFile
 
 import pytest
 import httpx
@@ -127,8 +130,40 @@ def app_modules(monkeypatch, tmp_path):
             assert plugin_name == "astrbot_plugin_ba_stats"
             return tmp_path / "plugin-data"
 
+    class Context:
+        def __init__(self, prefixes=None):
+            self.prefixes = prefixes or ["/"]
+            self.registered_web_apis = []
+
+        def get_config(self, umo):
+            return {"wake_prefix": self.prefixes}
+
+        def register_web_api(self, route, view_handler, methods, desc):
+            # AstrBot v4.29.4 core/star/context.py:774: same route/method
+            # replaces its handler; registered_web_apis is the live list.
+            for index, api in enumerate(self.registered_web_apis):
+                if api[0] == route and api[2] == methods:
+                    self.registered_web_apis[index] = (route, view_handler, methods, desc)
+                    return
+            self.registered_web_apis.append((route, view_handler, methods, desc))
+
+    # Signatures/envelopes follow v4.29.4 astrbot/api/web.py:343-439.
+    # The test environment has no AstrBot/FastAPI/Starlette installation.
+    def json_response(data=None, *, status_code=200, headers=None):
+        return SimpleNamespace(data={} if data is None else data, status_code=status_code,
+                               headers=headers or {}, media_type="application/json")
+
+    def error_response(message, *, status_code=400, data=None, headers=None):
+        return json_response({"status": "error", "message": message, "data": data},
+                             status_code=status_code, headers=headers)
+
+    def stream_response(content, *, content_type="text/event-stream", status_code=200, headers=None):
+        return SimpleNamespace(content=content, media_type=content_type,
+                               status_code=status_code, headers=headers or {})
+
     stubs = {key: ModuleType(key) for key in (
-        "astrbot", "astrbot.api", "astrbot.api.event", "astrbot.api.message_components", "astrbot.api.star"
+        "astrbot", "astrbot.api", "astrbot.api.event", "astrbot.api.message_components", "astrbot.api.star",
+        "astrbot.api.web",
     )}
     stubs["astrbot"].__path__ = []
     stubs["astrbot.api"].__path__ = []
@@ -138,9 +173,13 @@ def app_modules(monkeypatch, tmp_path):
     stubs["astrbot.api.event"].filter = Filters()
     stubs["astrbot.api.message_components"].Plain = Plain
     stubs["astrbot.api.message_components"].At = At
-    stubs["astrbot.api.star"].Context = object
+    stubs["astrbot.api.star"].Context = Context
     stubs["astrbot.api.star"].Star = Star
     stubs["astrbot.api.star"].StarTools = StarTools
+    stubs["astrbot.api.web"].request = SimpleNamespace(username="synthetic-admin", method="GET", json=AsyncMock(return_value=None))
+    stubs["astrbot.api.web"].json_response = json_response
+    stubs["astrbot.api.web"].error_response = error_response
+    stubs["astrbot.api.web"].stream_response = stream_response
     for key, module in stubs.items():
         monkeypatch.setitem(sys.modules, key, module)
     name = "_ba_stats_main_contract"
@@ -153,6 +192,7 @@ def app_modules(monkeypatch, tmp_path):
             main=main, registered=registered,
             models=importlib.import_module(name + ".models"),
             storage=importlib.import_module(name + ".storage"),
+            web=stubs["astrbot.api.web"], context_class=Context,
             package=name,
         )
     finally:
@@ -165,12 +205,23 @@ def app_modules(monkeypatch, tmp_path):
 async def app(app_modules):
     plugins = []
 
-    async def make(*, images=False, config=None, prefixes=None):
+    async def make(*, images=False, config=None, prefixes=None, context=None):
         values = {"query": {"cooldown_seconds": 0}, "output": {"image_enabled": images}}
         if config:
             values.update(config)
-        context = SimpleNamespace(get_config=lambda umo: {"wake_prefix": prefixes or ["/"]})
-        plugin = app_modules.main.BAStatsPlugin(context, values)
+        context = context or app_modules.context_class(prefixes)
+        class Config(dict):
+            schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
+
+            def save_config(self, replace_config=None):
+                if replace_config:
+                    self.update(replace_config)
+                self.config_path.write_text(json.dumps(self), encoding="utf-8")
+
+        stored = Config(values)
+        stored.config_path = app_modules.main.StarTools.get_data_dir("astrbot_plugin_ba_stats").parent / f"config-{len(plugins)}.json"
+        stored.save_config()
+        plugin = app_modules.main.BAStatsPlugin(context, stored)
         plugins.append(plugin)
         await plugin.initialize()
         return plugin
@@ -323,7 +374,7 @@ async def test_admin_status_does_not_expose_configured_credentials(app):
     }})
     replies = await collect(plugin, Event([Plain("/ba status")], admin=True))
     text = replies[0][1]
-    assert "已填写" in text
+    assert "在线查询：已启用" in text
     assert secret not in text and identity not in text and "example.invalid" not in text
     assert plugin.client.status()["requests"] == 0
     assert "今日总请求：0/100（固定上限）" in text
@@ -421,9 +472,9 @@ async def test_report_delivery_failure_switches_remaining_pages_to_plain_text(ap
     plugin = await app.make(images=True)
     execute = AsyncMock(return_value=SimpleNamespace(text="", view={}, instructions=()))
     monkeypatch.setattr(plugin.service, "execute", execute)
-    monkeypatch.setattr(plugin.renderer, "views", lambda view: [0, 1, 2])
-    monkeypatch.setattr(plugin.renderer, "text", lambda view: f"same data page {view}")
-    render = AsyncMock(side_effect=lambda view, umo: f"page-{view}.jpg")
+    monkeypatch.setattr(plugin.renderer, "views", lambda view: [{"kind": "recent", "page": i} for i in range(3)])
+    monkeypatch.setattr(plugin.renderer, "text", lambda view: f"same data page {view['page']}")
+    render = AsyncMock(side_effect=lambda view, umo: f"page-{view['page']}.jpg")
     monkeypatch.setattr(plugin, "_image", render)
     event = Event([Plain("/ba stats stb:152117")])
     attempted = []
@@ -557,7 +608,7 @@ async def test_quota_is_local_and_available_without_access_or_admin(app, command
 
 async def test_handler_enforces_user_group_quota_and_preserves_cached_access(app):
     plugin = await app.make(config={
-        "access": {"enabled": True, "client_id": "synthetic-test", "base_url": "https://synthetic.invalid"},
+        "access": {"enabled": True, "base_url": "https://synthetic.invalid"},
         "query": {"cooldown_seconds": 0},
         "maintenance": {"request_interval": 0.1, "retries": 0},
         "limits": {"user_daily_limit": 2, "group_daily_limit": 3},
@@ -596,7 +647,7 @@ async def test_handler_enforces_user_group_quota_and_preserves_cached_access(app
 
 async def test_mentions_charge_request_sender_not_queried_user(app):
     plugin = await app.make(config={
-        "access": {"enabled": True, "client_id": "synthetic-test", "base_url": "https://synthetic.invalid"},
+        "access": {"enabled": True, "base_url": "https://synthetic.invalid"},
         "query": {"cooldown_seconds": 0}, "maintenance": {"request_interval": 0.1, "retries": 0},
     })
     await plugin.storage.set_binding("onebot:test", "target", app.storage.Binding(
@@ -636,3 +687,216 @@ def test_quota_defaults_schema_and_fixed_total_are_consistent(app_modules):
         for invalid in [-1, 101, True, 2.5, "20", None]:
             with pytest.raises(ValueError, match="0–100"):
                 settings.from_config({"limits": {key: invalid}})
+
+
+async def test_image_failure_logs_onebot_details_and_image_metadata(app, tmp_path, caplog):
+    plugin = await app.make(config={"diagnostics": {"enabled": True}})
+    picture = tmp_path / "report.jpg"
+    picture.write_bytes(b"\xff\xd8\xff" + b"synthetic-image")
+    error = RuntimeError("not used")
+    error.result = {"retcode": 1200, "message": "Timeout: sendMsg base64://private-image https://secret.invalid/?token=secret",
+                    "data": "private-response", "echo": {"token": "private-echo"}}
+    with caplog.at_level(logging.WARNING):
+        plugin._log_image_send_failure(error, str(picture))
+    assert "retcode=1200" in caplog.text and "Timeout: sendMsg" in caplog.text
+    assert "JPEG" in caplog.text and str(picture.stat().st_size) in caplog.text
+    assert not any(secret in caplog.text for secret in ("private-image", "secret.invalid", "private-response", "private-echo"))
+    import io, zipfile
+    with zipfile.ZipFile(io.BytesIO(plugin.diagnostics.export_zip())) as archive:
+        logs = "".join(archive.read(name).decode() for name in archive.namelist() if name.endswith(".jsonl"))
+    assert "image_send_error" in logs and "1200" in logs
+    assert "private-response" not in logs and "private-image" not in logs
+
+
+async def test_legacy_access_keys_are_ignored_and_diagnostics_default_off(app):
+    plugin = await app.make(config={"access": {"enabled": True, "client_id": "old", "api_token": "legacy"}})
+    assert not hasattr(plugin.settings, "client_id") and not hasattr(plugin.client.config, "api_token")
+    assert not plugin.settings.diagnostics_enabled
+    assert not (plugin.data_dir / "diagnostics").exists()
+
+
+async def test_settings_registers_only_config_status_and_download_and_reports_empty_logs(app):
+    plugin = await app.make()
+    routes = {route: (handler, methods) for route, handler, methods, _ in plugin.context.registered_web_apis}
+    assert set(routes) == {
+        "/astrbot_plugin_ba_stats/diagnostics/status",
+        "/astrbot_plugin_ba_stats/diagnostics/download",
+        "/astrbot_plugin_ba_stats/settings/config",
+    }
+    assert routes["/astrbot_plugin_ba_stats/settings/config"][1] == ["GET", "POST"]
+    assert all(methods == ["GET"] for route, (_, methods) in routes.items() if "/diagnostics/" in route)
+    status = await routes["/astrbot_plugin_ba_stats/diagnostics/status"][0]()
+    assert status.status_code == 200
+    assert status.headers["Cache-Control"] == "no-store"
+    assert status.data == {"enabled": False, "bytes": 0, "limit_bytes": 30 * 1024 * 1024, "files": 0}
+    download = await routes["/astrbot_plugin_ba_stats/diagnostics/download"][0]()
+    assert download.media_type == "application/zip"
+    assert download.headers["Cache-Control"] == "no-store"
+    assert download.headers["Content-Disposition"] == 'attachment; filename="ba-stats-diagnostics.zip"'
+    with ZipFile(BytesIO(b"".join(download.content))) as archive:
+        assert archive.namelist() == []
+    assert not (plugin.data_dir / "diagnostics").exists()
+
+
+async def test_diagnostics_download_retains_logs_when_recording_is_disabled(app):
+    plugin = await app.make()
+    plugin.diagnostics.set_enabled(True)
+    assert plugin.diagnostics.record("http_response", route="/api/match", status=200, duration_ms=20)
+    plugin.diagnostics.set_enabled(False)
+    before = plugin.diagnostics.stats()
+    response = await plugin._download_diagnostics()
+    assert response.status_code == 200
+    with ZipFile(BytesIO(b"".join(response.content))) as archive:
+        assert archive.testzip() is None
+        records = [json.loads(line) for name in archive.namelist()
+                   for line in archive.read(name).splitlines()]
+    assert records[0]["event"] == "http_response" and records[0]["status"] == 200
+    assert not before["enabled"] and before["bytes"] > 0
+    assert (await plugin._diagnostics_status()).data == before == plugin.diagnostics.stats()
+
+
+async def test_diagnostics_handlers_require_host_authenticated_identity(app, monkeypatch):
+    plugin = await app.make()
+    monkeypatch.setattr(app.web.request, "username", None)
+    export = AsyncMock(side_effect=AssertionError("unauthenticated export must not run"))
+    monkeypatch.setattr(plugin.diagnostics, "export_zip", export)
+    for handler in (plugin._diagnostics_status, plugin._download_diagnostics, plugin._settings_config):
+        response = await handler()
+        assert response.status_code == 401
+        assert response.data["status"] == "error"
+        assert response.headers["Cache-Control"] == "no-store"
+    export.assert_not_called()
+
+
+async def test_diagnostics_download_read_failure_returns_safe_error(app, monkeypatch):
+    plugin = await app.make()
+
+    def fail():
+        raise OSError("PRIVATE/path/token=SECRET")
+
+    monkeypatch.setattr(plugin.diagnostics, "export_zip", fail)
+    response = await plugin._download_diagnostics()
+    assert response.status_code == 500
+    assert response.data["status"] == "error"
+    assert "SECRET" not in str(response.data) and "PRIVATE" not in str(response.data)
+
+
+async def test_terminate_removes_owned_web_routes_and_closes_stale_handlers(app):
+    plugin = await app.make()
+
+    async def unrelated():
+        return "other plugin"
+
+    plugin.context.register_web_api("/other-plugin/ping", unrelated, ["GET"], "unrelated")
+    await plugin.terminate()
+    assert plugin.context.registered_web_apis == [("/other-plugin/ping", unrelated, ["GET"], "unrelated")]
+    for handler in (plugin._diagnostics_status, plugin._download_diagnostics, plugin._settings_config):
+        response = await handler()
+        assert response.status_code == 503
+        assert response.data["status"] == "error"
+    assert not plugin.diagnostics.enabled
+
+
+async def test_terminate_preserves_a_newer_instances_replacement_route(app):
+    plugin = await app.make()
+
+    async def replacement():
+        return "new instance"
+
+    route = "/astrbot_plugin_ba_stats/diagnostics/download"
+    plugin.context.register_web_api(route, replacement, ["GET"], "new instance")
+    await plugin.terminate()
+    assert plugin.context.registered_web_apis == [(route, replacement, ["GET"], "new instance")]
+
+
+def test_diagnostics_schema_defaults_and_view_download_entry(app_modules):
+    schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
+    options = schema["diagnostics"]["items"]
+    assert options["show_options"]["type"] == "bool" and options["show_options"]["default"] is False
+    assert options["enabled"]["default"] is False
+    assert options["enabled"]["condition"] == {"show_options": True}
+    # Hiding options must not silently turn off an already enabled recorder.
+    assert app_modules.main.Settings.from_config({
+        "diagnostics": {"show_options": False, "enabled": True},
+    }).diagnostics_enabled
+
+    class ViewParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.details = 0
+            self.download_in_details = False
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag == "details":
+                assert "open" not in attrs
+                self.details += 1
+            if tag == "button" and attrs.get("id") == "download":
+                self.download_in_details = self.details > 0
+
+        def handle_endtag(self, tag):
+            if tag == "details":
+                self.details -= 1
+
+    html = (ROOT / "views/settings/index.html").read_text(encoding="utf-8")
+    parser = ViewParser()
+    parser.feed(html)
+    assert parser.download_in_details and parser.details == 0
+    assert not (ROOT / "views/diagnostics/index.html").exists()
+
+
+async def test_settings_handler_reads_and_saves_diagnostics_without_restarting_business(app, monkeypatch):
+    plugin = await app.make()
+    response = await plugin._settings_config()
+    assert response.status_code == 200 and response.headers["Cache-Control"] == "no-store"
+    original_client = plugin.client
+    original_service = plugin.service
+    monkeypatch.setattr(app.web.request, "method", "POST")
+    app.web.request.json.return_value = {"revision": response.data["revision"], "changes": {"diagnostics.enabled": True}}
+    saved = await plugin._settings_config()
+    assert saved.status_code == 200 and saved.data["diagnostics_applied"]
+    assert plugin.diagnostics.enabled and plugin.settings.diagnostics_enabled
+    assert plugin.client is original_client and plugin.service is original_service
+    assert not plugin._closed and not saved.data["reload_required"]
+    assert plugin.web_settings.config["diagnostics"]["enabled"] is True
+
+
+@pytest.mark.parametrize("body", [None, [], "bad", {"changes": {"diagnostics.enabled": True}}])
+async def test_settings_malformed_json_is_400_and_never_changes_config(app, monkeypatch, body):
+    plugin = await app.make()
+    before = plugin.web_settings.config.config_path.read_bytes()
+    monkeypatch.setattr(app.web.request, "method", "POST")
+    app.web.request.json.return_value = body
+    response = await plugin._settings_config()
+    assert response.status_code == 400
+    assert plugin.web_settings.config.config_path.read_bytes() == before
+    assert not plugin.diagnostics.enabled
+
+
+async def test_settings_json_decoder_error_and_close_during_body_are_rejected(app, monkeypatch):
+    plugin = await app.make()
+    monkeypatch.setattr(app.web.request, "method", "POST")
+    app.web.request.json.side_effect = ValueError("private raw request")
+    response = await plugin._settings_config()
+    assert response.status_code == 400 and "private" not in str(response.data)
+
+    async def closed_while_reading():
+        await plugin.terminate()
+        return {"revision": "stale", "changes": {"diagnostics.enabled": True}}
+
+    app.web.request.json.side_effect = closed_while_reading
+    response = await plugin._settings_config()
+    assert response.status_code == 503 and not plugin.diagnostics.enabled
+
+
+async def test_settings_conflict_and_business_changes_report_manual_reload(app, monkeypatch):
+    plugin = await app.make()
+    before = (await plugin._settings_config()).data
+    monkeypatch.setattr(app.web.request, "method", "POST")
+    app.web.request.json.return_value = {"revision": before["revision"], "changes": {"query.default_limit": 6}}
+    response = await plugin._settings_config()
+    assert response.status_code == 200 and response.data["reload_required"]
+    assert response.data["pending_restart"] == ["query.default_limit"]
+    assert plugin.settings.default_limit == 5 and not plugin._closed
+    response = await plugin._settings_config()
+    assert response.status_code == 409

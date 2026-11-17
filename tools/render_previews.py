@@ -46,15 +46,18 @@ def sample_views() -> dict[str, dict]:
         kind="overview",
         metrics=[
             {"label": "ELO", "value": 1834.25, "note": "来源更新时点"},
-            {"label": "样本胜率", "value": 75, "format": "percent", "note": "排位样本 4 场"},
-            {"label": "单位交换比", "value": 150 / 96, "note": "摧毁单位 / 损失单位"},
-            {"label": "价值交换比", "value": 39602 / 26081, "note": "摧毁价值 / 损失价值"},
+            {"label": "分析样本胜率", "value": 75, "format": "percent", "note": "75 胜 / 100 场已知结果"},
+            {"label": "近期分值 K/D", "value": 150 / 96, "note": "近期 5 场摧毁分 ÷ 损失分"},
+            {"label": "伤害交换比", "value": 39602 / 26081, "note": "分析单局 · #sample-match-001"},
         ],
-        common_units=[{"name": "合成装甲单位 A", "count": 12}, {"name": "合成支援兵种 B", "count": 8}],
+        common_units=[{"name": "合成装甲单位 A", "count": 12,"damage":5200,"roi":1.6}, {"name": "合成支援兵种 B", "count": 8,"damage":2100,"roi":1.2}],
+        analysis_scope="分析样本 100 场",
+        map_stats=[{"name":"合成港区","count":8,"win_rate":50}],
     )
     recent = deepcopy(base)
     recent.update(kind="recent", rows=[
         {
+            "score": [8.6, 7.1, 2.3, 5.8, None][index], "score_band": "high" if index == 0 else "low" if index == 2 else "medium",
             "id": f"sample-match-{index + 1:03d}", "map_name": f"合成地图 {index + 1}",
             "mode": "custom" if index == 4 else "ranked", "outcome": "loss" if index == 2 else "win",
             "started_at": f"2026-11-{17 - index:02d}T02:20:00Z", "duration_seconds": 1327 + index * 53,
@@ -66,18 +69,29 @@ def sample_views() -> dict[str, dict]:
     ])
     match = deepcopy(base)
     match.update(
-        kind="match", scope="单场完整记录 · 自定义 · 实际 3 对 2 人",
-        match={"id": "sample-match-001", "map_name": "合成港区", "mode": "custom",
-               "started_at": "2026-11-17T02:20:00Z", "duration_seconds": 1327, "winner": "蓝队"},
+        kind="match", scope="单场记录 · 排位 · 5 对 5 人",
+        match={"id": "sample-match-001", "map_name": "合成港区", "mode": "ranked",
+               "started_at": "2026-11-17T02:20:00Z", "duration_seconds": 2700, "winner": "A 队", "target_outcome": "win"},
+        prediction={"a": 64, "b": 36},
         teams=[
-            {"name": name, "outcome": "win" if side == 0 else "loss", "players": [
-                {"id": f"sample-{side}-{index}", "name": f"合成队员 {side + 1}-{index + 1}",
+            {"name": name, "outcome": "win" if side == 0 else "loss",
+             "metrics": [{"label": label, "value": values[side], "format": "integer"}
+                         for label, values in [("摧毁分", (32960, 31000)), ("损失分", (31000, 32960)),
+                                               ("击杀", (234, 227)), ("阵亡", (227, 234)),
+                                               ("伤害", (4983, 6480)), ("出兵花费", (40200, 43450)),
+                                               ("占点", (15, 16)), ("补给消耗", (62685, 82319))]],
+             "composition": [{"name":"装甲", "percentage":40}, {"name":"步兵", "percentage":30}, {"name":"固定翼", "percentage":30}],
+             "composition_note":"合成样本", "players": [
+                {"id": base["player"]["id"] if side == 0 and index == 1 else f"sample-{side}-{index}",
+                 "name": base["player"]["name"] if side == 0 and index == 1 else f"合成队员 {side + 1}-{index + 1}",
                  "elo": 1800 + index * 12.5, "elo_delta": 8.25 if side == 0 else -8.25,
+                 "damage_dealt": 1253, "damage_received": 964, "objectives": 3,
+                 "spawned_value": 7570, "supply": 6926,
                  "kills": 36, "losses": 24, "unit_exchange": 1.5,
                  "destroyed_value": 9750.5, "lost_value": 6520.25, "value_exchange": 9750.5 / 6520.25}
                 for index in range(size)
             ]}
-            for side, (name, size) in enumerate([("蓝队", 3), ("红队", 2)])
+            for side, (name, size) in enumerate([("A 队", 5), ("B 队", 5)])
         ],
     )
     samples = {}
@@ -126,7 +140,7 @@ async def screenshots(artifacts: list[dict]) -> list[dict]:
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         try:
-            for label, width in [("desktop", 980), ("mobile", 390)]:
+            for label, width in [("desktop", 900), ("mobile", 390)]:
                 context = await browser.new_context(viewport={"width": width, "height": 900},
                                                     device_scale_factor=1, offline=True)
                 await context.route("**/*", lambda route: route.abort())

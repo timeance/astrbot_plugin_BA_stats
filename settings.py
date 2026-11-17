@@ -1,6 +1,23 @@
 """单一配置来源：AstrBotConfig；启动时校验并快照。"""
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+
+def valid_https_origin(value):
+    """Shared API origin contract for runtime and both settings interfaces."""
+    if not isinstance(value, str) or not value:
+        return False
+    if any(character.isspace() or ord(character) < 32 for character in value) or "\\" in value:
+        return False
+    try:
+        url = urlsplit(value)
+        return bool(url.scheme == "https" and url.hostname
+                    and url.username is None and url.password is None
+                    and url.path in {"", "/"} and not url.query and not url.fragment
+                    and (url.port is None or 1 <= url.port <= 65535))
+    except ValueError:
+        return False
 
 
 def bounded(data, key, default, lower, upper, cast=float):
@@ -24,8 +41,6 @@ def daily_limit(data, key, default):
 class Settings:
     enabled: bool = False
     base_url: str = "https://bot.batrace.top"
-    client_id: str = ""
-    api_token: str = ""
     default_limit: int = 5
     max_limit: int = 20
     cooldown_seconds: float = 3
@@ -43,6 +58,7 @@ class Settings:
     stale_hours: float = 24
     user_daily_limit: int = 20
     group_daily_limit: int = 100
+    diagnostics_enabled: bool = False
 
     @classmethod
     def from_config(cls, config):
@@ -51,6 +67,7 @@ class Settings:
         output = config.get("output", {})
         maintenance = config.get("maintenance", {})
         limits = config.get("limits", {})
+        diagnostics = config.get("diagnostics", {})
         maximum = bounded(query, "max_limit", 20, 1, 20, int)
         timezone = str(output.get("timezone", "Asia/Shanghai"))
         try:
@@ -63,8 +80,6 @@ class Settings:
         return cls(
             enabled=bool(access.get("enabled", False)),
             base_url=str(access.get("base_url", cls.base_url)).strip(),
-            client_id=str(access.get("client_id", "")).strip(),
-            api_token=str(access.get("api_token", "")).strip(),
             default_limit=bounded(query, "default_limit", 5, 1, maximum, int),
             max_limit=maximum,
             cooldown_seconds=bounded(query, "cooldown_seconds", 3, 0, 60),
@@ -81,4 +96,5 @@ class Settings:
             stale_hours=bounded(maintenance, "stale_hours", 24, 0, 168),
             user_daily_limit=daily_limit(limits, "user_daily_limit", 20),
             group_daily_limit=daily_limit(limits, "group_daily_limit", 100),
+            diagnostics_enabled=bool(diagnostics.get("enabled", False)),
         )

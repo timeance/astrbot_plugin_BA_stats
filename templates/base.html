@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
   <title>断箭战报 · {{ view.title }}</title>
   <style>
     :root {
@@ -28,7 +28,7 @@
     }
     a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
     a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-    .report { width: 100%; max-width: 980px; margin: 0 auto; padding: 30px 32px 24px; }
+    .report { width: 100%; max-width: 980px; margin: 0 auto; padding: 24px; }
     .brandline { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 20px; margin-bottom: 24px; color: var(--muted); font-size: 14px; }
     .brand { color: var(--accent); font-size: 17px; font-weight: 700; letter-spacing: 2px; }
     .identity { border-left: 4px solid var(--accent); padding-left: 18px; margin-bottom: 22px; }
@@ -76,10 +76,35 @@
     .participant h3 { font-size: 19px; }
     .participant .exchange { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .participant-id { color: var(--muted); font-size: 13px; margin-top: 3px; overflow-wrap: anywhere; }
+    .participant.target { border-left: 3px solid var(--accent); }
+    .compact-line { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 7px; overflow-wrap: anywhere; }
+    .compact-line span { min-width: 0; }
+    .compact-line b { font-weight: 600; }
+    .report-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .report-table th, .report-table td { padding: 9px 5px; text-align: right; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+    .report-table th { color: var(--muted); font-size: 13px; font-weight: 400; }
+    .report-table th:first-child, .report-table td:first-child { text-align: left; width: 38%; }
+    .compact-team { font-size: 14px; color: var(--muted); }
+    .score { display: inline-flex; flex-direction: column; font-size: 25px; font-weight: 700; line-height: 1.1; flex-shrink: 0; }
+    .score small { font-size: 11px; color: var(--muted); font-weight: 400; margin-bottom: 4px; }
+    .score.low { color: var(--loss); } .score.medium { color: var(--ink); } .score.high { color: var(--warning); }
+    .prediction { border: 1px solid var(--line); padding: 18px; background: var(--panel); }
+    .prediction-values { display: flex; justify-content: space-between; gap: 10px; margin: 12px 0; color: var(--accent); font-size: 24px; }
+    .prediction-values b:last-child { color: var(--loss); }
+    .prediction-bar { height: 9px; background: var(--loss); } .prediction-bar i { display: block; height: 100%; background: var(--accent); }
+    .match-columns { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 20px; }
+    .match-columns > section { min-width: 0; }
+    .composition-heading { font-size: 16px; margin: 15px 0 8px; }
+    .role-row { display: grid; grid-template-columns: 4em 1fr 4em; gap: 6px; font-size: 13px; align-items: center; margin: 6px 0; }
+    .role-row b { font-weight: 400; text-align: right; }
+    .role-track { background: var(--subtle); height: 6px; } .role-track i { display: block; height: 100%; background: var(--accent); }
     .notes { margin-top: 20px; padding-left: 18px; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
     footer { border-top: 1px solid var(--line); margin-top: 26px; padding-top: 14px; color: var(--muted); font-size: 13px; }
     footer p + p { margin-top: 5px; }
     footer p { overflow-wrap: anywhere; }
+    .attribution { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+    .attribution img { width: 24px; height: 24px; border-radius: 50%; }
+    .attribution a { color: var(--muted); font-size: 12px; }
     .stale { color: var(--warning); font-weight: 650; margin-bottom: 8px; }
     @media (max-width: 680px) {
       .report { padding: 22px 18px 20px; }
@@ -107,7 +132,7 @@
     <h1>{{ view.player.name }}</h1>
     <p class="identity-meta">玩家 ID：{{ view.player.id }}</p>
     {% endblock %}
-    <p class="scope">统计范围：{{ view.scope }}</p>
+    {% if view.scope != '暂无' %}<p class="scope">{{ view.scope }}</p>{% endif %}
   </header>
   {% if view.pagination %}<p class="pagination">{{ view.pagination }}</p>{% endif %}
   {% if view.metrics %}
@@ -124,11 +149,8 @@
   {% block content %}{% endblock %}
   {% if view.notes %}<ul class="notes">{% for note in view.notes %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}
   <footer>
-    {% if view.stale %}<p class="stale">旧缓存 · 以抓取时间为准</p>{% endif %}
-    <p>抓取时间：{{ view.fetched_at }}</p>
-    <p>来源更新：{{ view.source_updated_at }}</p>
-    <p>数据来源：{% if view.source_url %}<a href="{{ view.source_url }}" rel="noreferrer noopener">{{ view.source_url }}</a>{% else %}暂无{% endif %}</p>
-    {% if view.player.source_url and view.player.source_url != view.source_url %}<p>玩家来源：<a href="{{ view.player.source_url }}" rel="noreferrer noopener">{{ view.player.source_url }}</a></p>{% endif %}
+    {% if view.stale %}<p class="stale">旧缓存 · 抓取时间：{{ view.fetched_at }}</p>{% endif %}
+    <div class="attribution"><img src="{{ view.avatar }}" alt="GitHub 头像"><a href="https://github.com/timeance/astrbot_plugin_BA_stats" rel="noreferrer noopener">timeance/astrbot_plugin_BA_stats</a><span>数据来源 BATracer</span></div>
   </footer>
 </main>
 </body>
