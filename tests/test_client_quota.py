@@ -6,6 +6,7 @@ midnight rollover have their own storage tests and are not duplicated here.
 
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import datetime
 
 import httpx
@@ -445,19 +446,24 @@ async def test_cache_write_deadline_rolls_back_and_next_request_recovers(tmp_pat
         calls.append(request)
         return response()
 
-    async with running_client(tmp_path, handler, wait_timeout=0.1) as (client, storage):
+    async with running_client(tmp_path, handler, wait_timeout=1) as (client, storage):
         actor = QuotaActor("p", "u", "g")
+        prune_entered = asyncio.Event()
 
         async def paused_prune(*args):
+            prune_entered.set()
             await asyncio.Event().wait()
 
         with monkeypatch.context() as patch:
             patch.setattr(storage, "_prune", paused_prune)
             with pytest.raises(RequestTimeoutError):
                 await search(client, actor, "Interrupted cache write")
+        assert prune_entered.is_set()
         assert not storage._connection().in_transaction
         assert await storage.cache_count() == 0
         assert await counts(storage, actor) == (1, 1, 1)
+        # Recovery checks rollback/lock release, not sub-second CI disk speed.
+        client.config = replace(client.config, wait_timeout=5)
         assert (await search(client, actor, "Recovery")).data[0].id == "001"
         assert await counts(storage, actor) == (2, 2, 2)
         assert len(calls) == 2
