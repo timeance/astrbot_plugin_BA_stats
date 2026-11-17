@@ -32,7 +32,7 @@ from render import Renderer
 
 
 def sample_views() -> dict[str, dict]:
-    """Deterministic synthetic data; deliberately unequal 3v2 team sizes."""
+    """Deterministic synthetic data, including long names and missing fields."""
     base = {
         "player": {"id": "sample-000001", "name": "蓝线观察员 · 合成样本"},
         "scope": "最近取得 5 场 · 其中排位样本 4 场 · 非完整历史",
@@ -72,19 +72,23 @@ def sample_views() -> dict[str, dict]:
         kind="match", scope="单场记录 · 排位 · 5 对 5 人",
         match={"id": "sample-match-001", "map_name": "合成港区", "mode": "ranked",
                "started_at": "2026-11-17T02:20:00Z", "duration_seconds": 2700, "winner": "A 队", "target_outcome": "win"},
-        prediction={"a": 64, "b": 36},
+        prediction={"a": 50, "b": 50},
         teams=[
             {"name": name, "outcome": "win" if side == 0 else "loss",
-             "metrics": [{"label": label, "value": values[side], "format": "integer"}
+             "metrics": [{"label": label, "value": values[side], "format": "decimal" if label == "赛后平均 ELO" else "integer"}
                          for label, values in [("摧毁分", (32960, 31000)), ("损失分", (31000, 32960)),
-                                               ("击杀", (234, 227)), ("阵亡", (227, 234)),
+                                               ("赛后平均 ELO", (1833.25, 1816.75)), ("击杀", (234, 227)), ("阵亡", (227, 234)),
                                                ("伤害", (4983, 6480)), ("出兵花费", (40200, 43450)),
                                                ("占点", (15, 16)), ("补给消耗", (62685, 82319))]],
-             "composition": [{"name":"装甲", "percentage":40}, {"name":"步兵", "percentage":30}, {"name":"固定翼", "percentage":30}],
+             "composition": [{"name": role, "percentage": percentages[side]}
+                             for role, percentages in [("装甲", (20, 17)), ("步兵", (13, 13)), ("侦察", (10, 8)),
+                                                        ("炮兵", (5, 7)), ("防空", (17, 19)), ("直升机", (10, 15)),
+                                                        ("固定翼", (24, 20)), ("后勤/运输", (1, 1))]],
              "composition_note":"合成样本", "players": [
                 {"id": base["player"]["id"] if side == 0 and index == 1 else f"sample-{side}-{index}",
                  "name": base["player"]["name"] if side == 0 and index == 1 else f"合成队员 {side + 1}-{index + 1}",
-                 "elo": 1800 + index * 12.5, "elo_delta": 8.25 if side == 0 else -8.25,
+                 "elo_before": 1800 + index * 12.5,
+                 "elo": 1800 + index * 12.5 + (8.25 if side == 0 else -8.25), "elo_delta": 8.25 if side == 0 else -8.25,
                  "damage_dealt": 1253, "damage_received": 964, "objectives": 3,
                  "spawned_value": 7570, "supply": 6926,
                  "kills": 36, "losses": 24, "unit_exchange": 1.5,
@@ -175,9 +179,14 @@ async def screenshots(artifacts: list[dict]) -> list[dict]:
 
 
 def main() -> int:
+    global OUTPUT
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--screenshots", action="store_true", help="use already installed local headless Chromium")
+    parser.add_argument("--output", type=Path, default=OUTPUT, help="preview directory inside this session")
     args = parser.parse_args()
+    OUTPUT = args.output.resolve()
+    if not OUTPUT.is_relative_to(SESSION):
+        parser.error("--output must stay inside this session directory")
     OUTPUT.mkdir(parents=True, exist_ok=True)
     artifacts = []
     for sample_name, view in sample_views().items():

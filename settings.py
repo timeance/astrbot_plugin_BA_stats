@@ -47,7 +47,7 @@ class Settings:
     chinese_aliases: bool = True
     image_enabled: bool = True
     image_send_mode: str = "base64"
-    theme: str = "dark"
+    theme: str = "light"
     timezone: str = "Asia/Shanghai"
     request_interval: float = 1
     concurrency: int = 2
@@ -75,7 +75,7 @@ class Settings:
             ZoneInfo(timezone)
         except (ZoneInfoNotFoundError, ValueError):
             raise ValueError("时区无效，请填写 Asia/Shanghai 等 IANA 时区名。") from None
-        theme = output.get("theme", "dark")
+        theme = output.get("theme", "light")
         if theme not in {"dark", "light"}:
             raise ValueError("主题必须为 dark 或 light。")
         image_send_mode = output.get("image_send_mode", "base64")

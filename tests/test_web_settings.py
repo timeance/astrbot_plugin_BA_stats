@@ -58,7 +58,9 @@ def test_snapshot_is_schema_based_and_never_discloses_legacy_credentials(editor)
     assert not any(text in public for text in ("PRIVATE_", "api_token", "client_id", "legacy_token"))
     fields = {field["path"]: field for field in snapshot["fields"]}
     assert fields["query.default_limit"]["value"] == 5
-    assert fields["output.theme"]["options"] == ["dark", "light"]
+    assert fields["output.theme"]["value"] == fields["output.theme"]["default"] == "light"
+    assert fields["output.theme"]["options"] == ["light", "dark"]
+    assert fields["output.theme"]["labels"] == ["浅色", "深色"]
     assert fields["output.image_send_mode"]["value"] == "base64"
     assert fields["output.image_send_mode"]["default"] == "base64"
     assert fields["output.image_send_mode"]["options"] == ["base64", "file", "url"]
@@ -66,6 +68,22 @@ def test_snapshot_is_schema_based_and_never_discloses_legacy_credentials(editor)
         "Base64（默认）", "本地文件（NapCat 直读）", "图片链接（NapCat 下载）"]
     assert "diagnostics.show_options" not in fields
     assert not snapshot["reload_required"] and not snapshot["diagnostics"]["enabled"]
+
+
+def test_saved_dark_theme_survives_unrelated_save(editor, web_module):
+    editor.config["output"] = {"theme": "dark"}
+    editor.config.save_config()
+    current = web_module.WebSettings(editor.config, web_module.Settings.from_config(editor.config),
+                                     editor.diagnostics)
+    snapshot = current.snapshot()
+    field = next(field for field in snapshot["fields"] if field["path"] == "output.theme")
+    assert field["value"] == "dark" and field["default"] == "light"
+    assert not snapshot["reload_required"]
+    result = save(current, {"diagnostics.enabled": True})
+    assert current.config["output"]["theme"] == current._running["output.theme"] == "dark"
+    assert not result["reload_required"]
+    stored = json.loads(current.config.config_path.read_text(encoding="utf-8-sig"))
+    assert stored["output"]["theme"] == "dark"
 
 
 @pytest.mark.parametrize("image_send_mode", ["file", "url"])
@@ -122,7 +140,7 @@ def test_revision_detects_changes_from_native_dashboard_and_retains_external_fie
     revision = editor.snapshot()["revision"]
     external = dict(editor.config)
     external.pop("legacy_token")
-    external["output"] = {"theme": "light"}
+    external["output"] = {"theme": "dark"}
     editor.config.config_path.write_text(json.dumps(external), encoding="utf-8")
     assert editor.snapshot()["revision"] != revision
     with pytest.raises(web_module.SettingsError) as error:
@@ -130,7 +148,7 @@ def test_revision_detects_changes_from_native_dashboard_and_retains_external_fie
     assert error.value.status_code == 409
     assert not editor.diagnostics.enabled
     result = save(editor, {"diagnostics.enabled": True})
-    assert editor.config["output"]["theme"] == "light"
+    assert editor.config["output"]["theme"] == "dark"
     assert "legacy_token" not in editor.config
     assert result["pending_restart"] == ["output.theme"]
 

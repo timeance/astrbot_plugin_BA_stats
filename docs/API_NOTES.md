@@ -85,9 +85,9 @@ SteamID64 与 STB ID 均保持字符串；**未找到可靠的 Steam→STB 映�
 
 `scoring.py` 使用 `assets/scoring-model.json`，移植 ba-dragon 固定提交的逐局评分逻辑与参数。近期战绩首列统一命名「评分」，按分数段着色，不显示称号。缺少必要数据时返回 `None` 并显示「暂无」，不补零。它与来源 ELO 分别展示，不是完整生涯评价，也不引入时间线或 Kalman 聚合算法。
 
-`ba last` 的单局图片顶部展示基于双方赛前 ELO 的赛前预测；中部左右排列双方数据对比与兵种构成；底部展示玩家数据。预测是模型估算，不表示实际赛果。兵种构成按模型的单位角色与基础价格估算出动花费，缺少单位价格或记录时保留不完整说明，不冒充实际结算。
+`ba last` 的单局图片顶部展示基于双方赛前 ELO 的赛前预测及双队摘要；中部左侧兵种构成、右侧双方对比；底部展示队伍玩家数据。摘要区分赛前平均 ELO（`OldRating`）与赛后平均 ELO（`NewRating`）。预测是模型估算，不表示实际赛果。兵种构成按模型的单位角色与基础价格估算出动花费，缺少单位价格或记录时保留不完整说明，不冒充实际结算。
 
-所有战报图片页脚包含 `assets/github-avatar.png`、`timeance/astrbot_plugin_BA_stats` 与固定文字「数据来源 BATracer」。设置提示仍原样保留「数据来源 BATrace ，如有帮助请支持该平台」。
+所有战报图片页脚内嵌 `assets/github-mark-black.svg` 或 `assets/github-mark-white.svg`，并包含 `timeance/astrbot_plugin_BA_stats` 与固定文字「数据来源 BATracer」。设置提示仍原样保留「数据来源 BATrace ，如有帮助请支持该平台」。
 
 ## 设置中心与诊断日志
 

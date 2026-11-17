@@ -5,13 +5,13 @@ Service -> Renderer view contract (independent of models.py):
   player: {id: str, name: str, source_url?: str}; required for player cards.
   metrics: [{label: str, value: number | str | None, unit?: str,
              format?: "integer" | "decimal" | "percent" | "signed", note?: str}].
-    Numbers default to two decimals; counts use integer. Percent values are
+    Numbers use two decimals, omitting .00 for exact integers; counts use integer. Percent values are
     already on the 0..100 scale. Strings are display text, never HTML.
   rows (recent): [{id, started_at, map_name, mode, outcome, duration_seconds,
     elo_delta, kills, losses, destroyed_value, lost_value, unit_exchange,
     value_exchange, source_url}]. Every field except id may be absent.
   match (match): {id, map_name, mode, started_at, duration_seconds, winner}.
-  teams (match): [{name, outcome, players: [{id, name, elo, elo_delta, kills,
+  teams (match): [{name, outcome, players: [{id, name, elo, elo_before, elo_delta, kills,
     losses, destroyed_value, lost_value, unit_exchange, value_exchange}]}].
     Team sizes are unrestricted; never pad absent players with dummy rows.
   common_units (overview, optional): [{name: str, count?: int}].
@@ -22,11 +22,13 @@ Service -> Renderer view contract (independent of models.py):
 
 Outcome: win/loss/unknown; mode: ranked/custom/unknown (other labels preserved).
 Unit counts (kills/losses) and values (destroyed_value/lost_value) are displayed
-separately. Renderer does not derive statistics, coverage, ratios, or winners.
+separately. Renderer does not infer coverage, exchange ratios, or winners.
+Team summaries average supplied ratings only when every member has that field;
+bar widths use the original numeric values, never their rounded display text.
 None, blank, nonfinite, and absent values display as 暂无; real zero stays zero.
 Missing/naive timestamps display as 暂无, rather than guessing a timezone.
 
-Renderer(theme='dark', timezone='Asia/Shanghai').template(view) returns final
+Renderer(theme='light', timezone='Asia/Shanghai').template(view) returns final
 escaped HTML. For AstrBot use the FIXED template '{{ body | safe }}' with
 data={'body': html}; never pass the generated HTML as another Jinja template.
 This preserves nicknames containing literal Jinja tags. text(view) uses exactly
@@ -53,6 +55,8 @@ MISSING = "暂无"
 _TITLES = {"overview": "玩家概览", "recent": "近期战绩", "match": "单局战报"}
 _OUTCOMES = {"win": "胜利", "loss": "失利", "unknown": "胜负暂无"}
 _MODES = {"ranked": "排位", "custom": "自定义", "unknown": "暂无"}
+_ROLES = {"装甲": "armor", "步兵": "infantry", "侦察": "recon", "炮兵": "artillery",
+          "防空": "air-defense", "直升机": "helicopter", "固定翼": "aircraft", "后勤/运输": "logistics"}
 
 
 def _plain(value, default=MISSING) -> str:
@@ -79,7 +83,16 @@ def _numeric(value, style="decimal") -> str:
         return MISSING
     if style == "integer":
         return str(int(parsed)) if parsed == parsed.to_integral_value() else MISSING
+    if style == "decimal" and parsed == parsed.to_integral_value():
+        return str(int(parsed))
     return format(parsed, "+.2f" if style == "signed" else ".2f")
+
+
+def _split_width(values) -> float | None:
+    numbers = [_number(value) for value in values]
+    if len(numbers) != 2 or any(value is None or value < 0 for value in numbers) or sum(numbers) == 0:
+        return None
+    return float(numbers[0] / sum(numbers) * 100)
 
 
 def _safe_url(value) -> str:
@@ -119,13 +132,14 @@ def _outcome(value) -> dict:
 class Renderer:
     """Render self-contained cards without network access or model imports."""
 
-    def __init__(self, theme: str = "dark", timezone: str = "Asia/Shanghai"):
+    def __init__(self, theme: str = "light", timezone: str = "Asia/Shanghai"):
         if theme not in {"dark", "light"}:
             raise ValueError("theme must be dark or light")
         self.theme = theme
         self.timezone = ZoneInfo(timezone)
-        self._avatar = "data:image/png;base64," + base64.b64encode(
-            (Path(__file__).parent / "assets" / "github-avatar.png").read_bytes()).decode("ascii")
+        logo = "github-mark-white.svg" if theme == "dark" else "github-mark-black.svg"
+        self._github_logo = "data:image/svg+xml;base64," + base64.b64encode(
+            (Path(__file__).parent / "assets" / logo).read_bytes()).decode("ascii")
         self._environment = Environment(
             loader=FileSystemLoader(Path(__file__).with_name("templates")),
             autoescape=select_autoescape(("html",)),
@@ -234,7 +248,7 @@ class Renderer:
         match = _mapping(view.get("match"))
         prepared = {
             "kind": kind,
-            "avatar": self._avatar,
+            "github_logo": self._github_logo,
             "title": _plain(view.get("title"), _TITLES[kind]),
             "theme": self.theme,
             "player": {
@@ -289,25 +303,51 @@ class Renderer:
             "winner": _plain(match.get("winner")),
             "target_outcome": _outcome(match.get("target_outcome")),
         }
-        for team in _records(view.get("teams")):
+        raw_teams = _records(view.get("teams"))
+        for team in raw_teams:
+            members = _records(team.get("players"))
+            team_metrics = [self._metric(item) for item in _records(team.get("metrics"))]
+            summary = []
+            # The service's mean ELO is the post-match value, not the prediction's
+            # pre-match input. Never reconstruct a missing pre-match rating.
+            for label, field in (("赛前平均 ELO", "elo_before"), ("平均 ELO 变化", "elo_delta")):
+                values = [_number(item.get(field)) for item in members]
+                complete = bool(values) and all(value is not None for value in values)
+                summary.append(self._metric({"label": label, "value": sum(values) / len(values) if complete else None,
+                                             "format": "signed" if field == "elo_delta" else "decimal"}))
+            for label in ("赛后平均 ELO", "摧毁分"):
+                metric = next((item for item in team_metrics if item["label"] == label), self._metric({"label": label}))
+                summary.append(metric)
+            composition = []
+            for item in _records(team.get("composition")):
+                percentage = _number(item.get("percentage"))
+                composition.append({"name": _plain(item.get("name")), "percentage": _numeric(percentage, "percent"),
+                                    "number": percentage if percentage is not None and 0 <= percentage <= 100 else None,
+                                    "role": _ROLES.get(item.get("name"), "other")})
+            total = sum((item["number"] or 0) for item in composition)
+            # Service omits zero-spend roles from a complete composition. Only
+            # a full, unqualified 100% distribution makes that omission zero.
+            composition_complete = (bool(composition) and all(item["number"] is not None for item in composition)
+                                    and abs(total - 100) <= Decimal("0.01") and not team.get("composition_note"))
             prepared["teams"].append({
                 "name": _plain(team.get("name")),
+                "side": "a" if team.get("name") == "A 队" else "b" if team.get("name") == "B 队" else "neutral",
                 "outcome": _outcome(team.get("outcome")),
-                "metrics": [self._metric(item) for item in _records(team.get("metrics"))],
-                "composition": [{"name": _plain(item.get("name")), "percentage": _numeric(item.get("percentage")),
-                                  "width": float(max(0, min(100, _number(item.get("percentage")) or 0)))}
-                                 for item in _records(team.get("composition"))],
+                "metrics": team_metrics,
+                "summary": [summary[index] for index in (0, 2, 1, 3)],
+                "composition": composition,
+                "composition_complete": composition_complete,
                 "composition_note": _plain(team.get("composition_note"), ""),
                 "players": [
                     {"id": _plain(item.get("id")), "name": _plain(item.get("name")),
                      "is_target": bool(player.get("id")) and item.get("id") == player.get("id"),
                      "metrics": self._exchange(item, elo=True)}
-                    for item in _records(team.get("players"))
+                    for item in members
                 ],
             })
         prediction = _mapping(view.get("prediction"))
         a, b = _number(prediction.get("a")), _number(prediction.get("b"))
-        prepared["prediction"] = ({"a": _numeric(a), "b": _numeric(b), "width": float(a)}
+        prepared["prediction"] = ({"a": _numeric(a, "percent"), "b": _numeric(b, "percent"), "width": float(a)}
                                   if a is not None and b is not None and 0 <= a <= 100 and 0 <= b <= 100 else None)
         # Each comparison row keeps the actual team order and both denominators.
         labels = list(dict.fromkeys(m["label"] for team in prepared["teams"][:2] for m in team["metrics"]))
@@ -315,8 +355,22 @@ class Renderer:
         for label in labels:
             pair = [next((m for m in team["metrics"] if m["label"] == label), None) for team in prepared["teams"][:2]]
             if len(pair) == 2:
-                prepared["comparisons"].append({"label": label, "values": [m["display"] if m else MISSING for m in pair],
-                                                 "notes": [m["note"] if m else "" for m in pair]})
+                numbers = [_number(next((m.get("value") for m in _records(team.get("metrics"))
+                                         if _plain(m.get("label")) == label), None)) for team in raw_teams[:2]]
+                prepared["comparisons"].append({"label": label,
+                                                 "values": [m["display"] if m else MISSING for m in pair],
+                                                 "notes": [m["note"] if m else "" for m in pair], "width": _split_width(numbers)})
+        category_names = list(dict.fromkeys(category["name"] for team in prepared["teams"][:2]
+                                             for category in team["composition"]))
+        category_names.sort(key=lambda name: list(_ROLES).index(name) if name in _ROLES else len(_ROLES))
+        prepared["composition_rows"] = []
+        if len(prepared["teams"]) >= 2:
+            for name in category_names:
+                values = [next((category["number"] for category in team["composition"] if category["name"] == name),
+                               Decimal(0) if team["composition_complete"] else None) for team in prepared["teams"][:2]]
+                prepared["composition_rows"].append({"label": name, "role": _ROLES.get(name, "other"),
+                                                     "values": [_numeric(value, "percent") + "%" if value is not None else MISSING for value in values],
+                                                     "width": _split_width(values)})
         page = _number(view.get("page"))
         page_count = _number(view.get("page_count"))
         row_total = _number(view.get("row_total"))

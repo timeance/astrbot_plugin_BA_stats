@@ -4,6 +4,17 @@ import pytest
 from settings import Settings
 
 
+def test_image_theme_defaults_to_light():
+    assert Settings().theme == "light"
+    assert Settings.from_config({}).theme == "light"
+    assert Settings.from_config({"output": {}}).theme == "light"
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_image_theme_preserves_explicit_saved_value(theme):
+    assert Settings.from_config({"output": {"theme": theme}}).theme == theme
+
+
 def test_image_send_mode_defaults_to_base64():
     assert Settings().image_send_mode == "base64"
     assert Settings.from_config({}).image_send_mode == "base64"

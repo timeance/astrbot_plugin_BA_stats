@@ -8,27 +8,52 @@
 {% endblock %}
 {% block content %}
 
-<section class="prediction">
+<section class="match-overview">
+<div class="prediction">
   <h2>赛前预测</h2>
   {% if view.prediction %}<div class="prediction-values"><b>A 队 {{ view.prediction.a }}%</b><b>B 队 {{ view.prediction.b }}%</b></div>
   <div class="prediction-bar"><i style="width:{{ view.prediction.width }}%"></i></div>
   <p class="metric-note">按赛前 ELO 估算</p>{% else %}<p>暂无完整赛前 ELO</p>{% endif %}
+</div>
+<div class="team-summaries">
+  {% for team in view.teams %}
+  <section class="team-summary side-{{ team.side }}">
+    <div class="summary-heading"><h2>{{ team.name }}<span class="team-size">{{ team.players | length }} 人</span></h2>{{ outcome(team.outcome) }}</div>
+    <dl class="summary-metrics">{% for metric in team.summary %}<div><dt>{{ metric.label }}</dt><dd>{{ metric.display }}</dd>{% if metric.note %}<small class="metric-note">{{ metric.note }}</small>{% endif %}</div>{% endfor %}</dl>
+  </section>
+  {% endfor %}
+</div>
 </section>
 <div class="match-columns">
-  <section><h2 class="section-heading">双方对比</h2>
-    {% if view.comparisons %}<table class="report-table"><thead><tr><th>指标</th>{% for team in view.teams[:2] %}<th>{{ team.name }}</th>{% endfor %}</tr></thead><tbody>
-    {% for row in view.comparisons %}<tr><td>{{ row.label }}</td>{% for value in row['values'] %}<td>{{ value }}{% if row.notes[loop.index0] %}<small class="metric-note">{{ row.notes[loop.index0] }}</small>{% endif %}</td>{% endfor %}</tr>{% endfor %}
-    </tbody></table>{% else %}<p class="scope">暂无对比数据</p>{% endif %}
-  </section>
   <section><h2 class="section-heading">兵种构成</h2><p class="metric-note">按基础花费估算</p>
-    {% for team in view.teams %}<h3 class="composition-heading">{{ team.name }}</h3>
-      {% for category in team.composition %}<div class="role-row"><span>{{ category.name }}</span><div class="role-track"><i style="width:{{ category.width }}%"></i></div><b>{{ category.percentage }}%</b></div>
-      {% else %}<p class="scope">暂无单位数据</p>{% endfor %}
-      {% if team.composition_note %}<p class="metric-note">{{ team.composition_note }}</p>{% endif %}
-    {% endfor %}
+    {% if view.composition_rows %}
+    <p class="metric-note composition-key">左 {{ view.teams[0].name }}（深）· 右 {{ view.teams[1].name }}（浅）</p>
+    <dl class="comparison-list composition-list">
+    {% for row in view.composition_rows %}<div class="comparison-row composition-row"><dt>{{ row.label }}</dt><dd>
+      <div class="comparison-values"><b>{{ row['values'][0] }}</b><b>{{ row['values'][1] }}</b></div>
+      <div class="comparison-track{% if row.width is none %} no-comparison{% endif %}" role="img" aria-label="{{ row.label }}：{{ view.teams[0].name }} {{ row['values'][0] }}，{{ view.teams[1].name }} {{ row['values'][1] }}">
+        {% if row.width is not none %}<i class="segment role-{{ row.role }} role-a" style="width:{{ row.width }}%"></i><i class="segment role-{{ row.role }} role-b" style="width:{{ 100 - row.width }}%"></i>{% endif %}
+      </div>
+    </dd></div>{% endfor %}
+    </dl>
+    {% else %}<p class="scope">暂无完整兵种构成</p>{% endif %}
+    {% for team in view.teams %}{% if team.composition_note %}<p class="metric-note">{{ team.name }}：{{ team.composition_note }}</p>{% endif %}{% endfor %}
+  </section>
+  <section><h2 class="section-heading">双方对比</h2>
+    {% if view.comparisons %}
+    <p class="metric-note comparison-key"><span class="side-{{ view.teams[0].side }}">左 {{ view.teams[0].name }}</span><span class="side-{{ view.teams[1].side }}">右 {{ view.teams[1].name }}</span></p>
+    <dl class="comparison-list">
+    {% for row in view.comparisons %}<div class="comparison-row"><dt>{{ row.label }}</dt><dd>
+      <div class="comparison-values"><b class="side-{{ view.teams[0].side }}">{{ row['values'][0] }}</b><b class="side-{{ view.teams[1].side }}">{{ row['values'][1] }}</b></div>
+      <div class="comparison-track{% if row.width is none %} no-comparison{% endif %}" role="img" aria-label="{{ row.label }}：{{ view.teams[0].name }} {{ row['values'][0] }}，{{ view.teams[1].name }} {{ row['values'][1] }}">
+        {% if row.width is not none %}<i class="segment side-{{ view.teams[0].side }}" style="width:{{ row.width }}%"></i><i class="segment side-{{ view.teams[1].side }}" style="width:{{ 100 - row.width }}%"></i>{% endif %}
+      </div>
+      {% if row.notes[0] or row.notes[1] %}<div class="comparison-notes"><small>{{ row.notes[0] }}</small><small>{{ row.notes[1] }}</small></div>{% endif %}
+    </dd></div>{% endfor %}
+    </dl>{% else %}<p class="scope">暂无对比数据</p>{% endif %}
   </section>
 </div>
-<h2 class="section-heading">玩家</h2>
+<h2 class="section-heading">队伍玩家</h2>
 {% for team in view.teams %}
 <section class="team">
   <div class="team-heading"><h2>{{ team.name }}<span class="team-size">{{ team.players | length }} 人</span></h2>{% if team.outcome.key != 'unknown' %}{{ outcome(team.outcome) }}{% endif %}</div>

@@ -97,14 +97,14 @@
       "theme": {
         "description": "图片主题",
         "type": "string",
-        "default": "dark",
+        "default": "light",
         "options": [
-          "dark",
-          "light"
+          "light",
+          "dark"
         ],
         "labels": [
-          "深色",
-          "浅色"
+          "浅色",
+          "深色"
         ]
       },
       "timezone": {
