@@ -80,7 +80,7 @@ AstrBot 原生《断箭》（Broken Arrow）战绩查询插件。支持玩家概
 
 ## 开发与许可
 
-- 宿主基线：AstrBot **v4.29.4**（详细测试与验证记录见 [验证记录](docs/VALIDATION.md)）。
+- 运行要求：AstrBot **4.29.4 及以上**，QQ（OneBot v11）；详细测试与验证记录见 [验证记录](docs/VALIDATION.md)。
 - 开源协议：**Apache-2.0**。
 - 致谢与参考：[BATrace](https://dash.batrace.top/)（战绩数据源）、[AlexanderHYu/ba-dragon](https://github.com/AlexanderHYu/ba-dragon)、[benx1n/wows-stats-bot](https://github.com/benx1n/wows-stats-bot)、[timeance/astrbot_plugin_openai_native](https://github.com/timeance/astrbot_plugin_openai_native)、AstrBot（第三方边界说明见 [第三方说明](docs/THIRD_PARTY.md)）。
 
