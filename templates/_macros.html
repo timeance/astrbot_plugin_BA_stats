@@ -1,9 +1,19 @@
-{% macro exchange(metrics) %}
-<div class="exchange">
-  {% for metric in metrics %}
-  <div><p class="metric-label">{{ metric.label }}</p><p class="small-value">{{ metric.value }}{% if metric.unit %}<span class="metric-unit">{{ metric.unit }}</span>{% endif %}</p></div>
-  {% endfor %}
-</div>
-{% endmacro %}
-
 {% macro outcome(value) %}<span class="outcome {{ value.key }}">{{ value.label }}</span>{% endmacro %}
+
+{% macro comparison(rows, composition=false) %}
+<p class="metric-note comparison-key"><span class="side-a">左 A 队{% if composition %}（深）{% endif %}</span><span class="side-b">右 B 队{% if composition %}（浅）{% endif %}</span></p>
+<dl class="comparison-list">
+  {% for row in rows %}
+  <div class="comparison-row{% if composition %} composition-row{% endif %}"><dt>{{ row.label }}</dt><dd>
+    <div class="comparison-values"><b class="side-a">{{ row['values'][0] }}</b><b class="side-b">{{ row['values'][1] }}</b></div>
+    {% if row.width is not none %}
+    <div class="comparison-track" aria-hidden="true">
+      <i class="segment {% if composition %}role-{{ row.role }} role-a{% else %}side-a{% endif %}" style="width:{{ row.width }}%"></i>
+      <i class="segment {% if composition %}role-{{ row.role }} role-b{% else %}side-b{% endif %}" style="width:{{ 100 - row.width }}%"></i>
+    </div>
+    {% endif %}
+    {% if row.notes and (row.notes[0] or row.notes[1]) %}<div class="comparison-notes"><small>{{ row.notes[0] }}</small><small>{{ row.notes[1] }}</small></div>{% endif %}
+  </dd></div>
+  {% endfor %}
+</dl>
+{% endmacro %}

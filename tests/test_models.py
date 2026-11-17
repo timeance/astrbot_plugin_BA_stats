@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from models import (
-    FetchResult, Match, Participant, Player, canonical_id, parse_match,
+    FetchResult, Match, Participant, Player, analysis_outcomes, canonical_id, parse_match,
     parse_player, parse_recent, parse_search, utc_datetime,
 )
 
@@ -56,9 +56,11 @@ def test_scoring_preserves_old_rating_and_unit_lifecycle_without_guessing_unit_a
 
 def test_scoring_career_spend_and_unit_category_are_retained_when_supplied():
     analysis = analysis_player({"matchCount": 1,
-        "categoryPreferences": [{"categoryKey": "vehicles", "totalCost": 2000}],
-        "highlightUnits": [{"unitId": 13, "categoryType": 2, "totalCost": 1500}],
+        "categoryPreferences": [{"totalCost": 99999}, {"categoryKey": "vehicles", "totalCost": 2000}],
+        "highlightUnits": [{"categoryType": 2, "totalCost": 99999},
+                           {"unitId": 13, "categoryType": 2, "totalCost": 1500}],
     }).analysis
+    assert len(analysis["categoryPreferences"]) == len(analysis["highlightUnits"]) == 1
     assert analysis["categoryPreferences"][0]["totalCost"] == 2000
     assert analysis["highlightUnits"][0]["categoryType"] == 2
     assert analysis["highlightUnits"][0]["totalCost"] == 1500
@@ -277,13 +279,20 @@ def test_analysis_duplicate_match_ids_do_not_inflate_samples_or_hide_conflicts(v
     rows = [{"matchId": 42 if i % 2 else "42", "endTime": 1700000000 + i,
              **({"won": value} if value is not None else {})}
             for i, value in enumerate(values)]
-    rows.append({"matchId": "042", "won": False})
-    points = analysis_player({"trend": {"points": rows}}).analysis["trend"]["points"]
-    assert len(points) == 2
+    rows.extend([{"matchId": "042", "won": False}, {"won": True}])
+    analysis = analysis_player({"trend": {"points": rows}}).analysis
+    points = analysis["trend"]["points"]
+    assert len(points) == 3
     assert points[0]["matchId"] == "42"
     assert points[0]["won"] is expected
     assert points[0]["endTime"] == utc_datetime(1700000000 + len(values) - 1)
     assert points[1]["matchId"] == "042"
+    conflict = True in values and False in values
+    assert points[0].get("wonConflict", False) is conflict
+    expected_outcomes = {"042": "loss"}
+    if conflict or expected is not None:
+        expected_outcomes["42"] = "conflict" if conflict else ("win" if expected else "loss")
+    assert analysis_outcomes(analysis) == expected_outcomes
 
 
 @pytest.mark.parametrize("analysis", [

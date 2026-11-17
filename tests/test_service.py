@@ -400,6 +400,87 @@ async def test_last_validates_real_client_detail_without_skipping_identity_error
             await client.close()
 
 
+@pytest.mark.parametrize("case", ["missing", "wrong_team", "detail_superset"])
+async def test_last_checks_the_known_roster_on_each_side(h, case):
+    from render import Renderer
+
+    def player(pid, team, elo, points):
+        return {"Id": pid, "Name": f"Player {pid}", "TeamId": team, "OldRating": elo, "NewRating": elo + 10,
+                "DestructionScore": points, "UnitData": {"u": {"Id": 13}}}
+
+    a1, a2 = player("001", 0, 2500, 1000), player("003", 0, 1700, 8000)
+    b1, b2 = player("002", 1, 1700, 2000), player("004", 1, 2500, 1000)
+    observer = player("005", 4, 2000, 99999)
+    listed = [a1, b1, observer] if case == "detail_superset" else [a1, a2, b1, b2, observer]
+    shown = {
+        "missing": [a1, b1],
+        "wrong_team": [a1, b1, dict(a2, TeamId=1), dict(b2, TeamId=0)],
+        "detail_superset": [a1, a2, b1, b2],
+    }[case]
+
+    def match_data(players):
+        return {"StartTime": 1700000000, "EndTime": 1700001200,
+                "Data": {p["Id"]: p for p in players}}
+
+    responses = {
+        "/api/players/search": {"players": [{"id": "001", "name": "Synthetic Player"}]},
+        "/api/analysis/player": {"matchCount": 1, "trend": {"points": [{"matchId": "42", "won": True}]}},
+        "/api/players/matches": {"matches": [{"matchId": "42", "data": match_data(listed)}]},
+        "/api/match": {"matchInfo": match_data(shown)},
+    }
+    requests = []
+
+    def handler(request):
+        requests.append((request.url.path, dict(request.url.params)))
+        return httpx.Response(200, json=responses[request.url.path])
+
+    c = h.modules.client
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = c.BatraceClient(c.ClientConfig(
+            enabled=True, base_url="https://example.invalid", request_interval=0, retries=0,
+        ), storage=h.storage, http_client=http)
+        h.service.client = client
+        try:
+            view = (await h.run("last stb:001")).view
+        finally:
+            await client.close()
+
+    assert requests == [
+        ("/api/players/search", {"q": "001", "limit": "20"}),
+        ("/api/analysis/player", {"stbid": "001"}),
+        ("/api/players/matches", {"stbid": "001", "limit": "20"}),
+        ("/api/match", {"matchid": "42"}),
+    ]
+    assert view["match"]["target_outcome"] == "win"
+    assert view["scope"].startswith(f"单局 · 实际收录 {len(shown)} 名玩家")
+    for team in view["teams"]:
+        members = [p for p in shown if str(p["TeamId"]) == team["id"]]
+        assert {p["id"] for p in team["players"]} == {p["Id"] for p in members}
+        destroyed = next(metric for metric in team["metrics"] if metric["key"] == "destroyed_value")
+        assert destroyed["value"] == sum(p["DestructionScore"] for p in members)
+        assert destroyed["observed_count"] == destroyed["participant_count"] == len(members)
+
+    renderer = Renderer()
+    html, text = renderer.template(view), renderer.text(view)
+    if case == "detail_superset":
+        assert view["match"].get("roster_complete") is not False
+        assert view["prediction"] == {"a": 50, "b": 50}
+        assert 'class="comparison-track"' in html and "A 队 50%" in text
+        assert "同场已知名单覆盖" not in view["scope"]
+    else:
+        assert view["match"]["roster_complete"] is False
+        assert view["match"]["roster_coverage"] == {
+            team_id: {"matched": 1, "known": 2} for team_id in ("0", "1")
+        }
+        assert view["prediction"] is None
+        assert 'class="comparison-track"' not in html and 'class="prediction-bar"' not in html
+        for output in (html, text):
+            assert "同场已知名单覆盖：A 1/2、B 1/2" in output
+            assert "暂无可用预测" in output
+        a_points, b_points = (1000, 2000) if case == "missing" else (2000, 10000)
+        assert f"摧毁分：{a_points} / {b_points}" in text
+
+
 async def test_empty_recent_rosters_remain_unavailable_without_identity_errors(h):
     h.client.recent.return_value = h.result([h.m.Match("empty")])
     assert (await h.run("recent stb:001")).view["rows"] == []
@@ -462,6 +543,8 @@ async def test_overview_uses_actual_sample_and_known_outcomes_only(h):
         "search": {"players": [{"id": "001", "name": "Synthetic"}]},
         "analysis": {"matchCount": 30, "trend": {"points": [
             {"matchId": "0", "won": True}, {"matchId": "1", "won": False}, {"matchId": "2"},
+            {"matchId": "0", "won": True}, {"matchId": "3", "won": True},
+            {"matchId": "3", "won": False}, {"won": False}, {"matchId": "analysis-only", "won": True},
         ]}},
     }, "001").analysis
     h.client.recent.return_value = h.result([
@@ -472,10 +555,109 @@ async def test_overview_uses_actual_sample_and_known_outcomes_only(h):
     metrics = {item["label"]: item for item in view["metrics"]}
     assert len(view["rows"]) == 3
     assert [row["outcome"] for row in view["rows"]] == ["win", "loss", "unknown"]
-    assert metrics["分析样本胜率"]["value"] == 50
+    analysis_rate = metrics["分析样本胜率"]
+    assert analysis_rate["value"] == pytest.approx(200 / 3)
+    assert (analysis_rate["sample_size"], analysis_rate["wins"], analysis_rate["losses"]) == (3, 2, 1)
+    rating = view["profile_rating"]
+    assert rating["sample_size"] == 0
+    assert rating["win_rate_sample"] == {"value": 50, "sample_size": 2, "wins": 1, "losses": 1}
     assert view["scope"] == "近期3场"
     assert view["style_scope"] == "近30场风格"
     assert view["stale"] is True
+
+
+async def test_recent_and_last_keep_analysis_authority_separate_from_scoring_inference(h):
+    h.player.analysis = h.m.parse_player({
+        "search": {"players": [{"id": h.player.id}]},
+        "analysis": {"trend": {"points": [
+            {"matchId": "loss", "won": False}, {"matchId": "loss", "won": False},
+            {"matchId": "conflict", "won": True}, {"matchId": "conflict", "won": False},
+            {"matchId": "inferred"}, {"matchId": "unrated", "won": True}, {"won": True},
+        ]}},
+    }, h.player.id).analysis
+
+    def match(mid):
+        return h.m.parse_match({"matchInfo": {"Data": {
+            "a": {"Id": h.player.id, "OldRating": 2000, "NewRating": 2000 if mid == "unrated" else 2010,
+                  "DestructionScore": 2000, "LossesScore": 1000},
+            "b": {"Id": "002", "TeamId": 1, "OldRating": 2100, "NewRating": 2090,
+                  "DestructionScore": 1000, "LossesScore": 2000},
+        }}}, mid)
+
+    matches = [match(mid) for mid in ("loss", "conflict", "inferred", "unrated")]
+    h.client.recent.return_value = h.result(matches)
+    recent = (await h.run("recent stb:001")).view["rows"]
+    assert [(row["outcome"], row["outcome_source"], row["outcome_conflict"], row["score_outcome_source"])
+            for row in recent] == [
+        ("loss", "analysis", False, "analysis"),
+        ("unknown", None, True, None),
+        ("unknown", None, False, "elo_delta"),
+        ("win", "analysis", False, None),
+    ]
+    assert recent[0]["score"] < recent[2]["score"]
+    assert recent[1]["score"] is recent[3]["score"] is None
+    rating = (await h.run("stats stb:001")).view["profile_rating"]
+    assert rating["sample_size"] == 2  # Explicit loss and Elo inference.
+    assert rating["win_rate_sample"] == {"value": 50, "sample_size": 2, "wins": 1, "losses": 1}
+    h.client.match.assert_not_awaited()
+
+    h.client.match.return_value = h.result(matches[0])
+    detail = (await h.run("last stb:001")).view
+    assert detail["match"]["target_outcome"] == "loss"
+    assert detail["match"]["target_outcome_source"] == "analysis"
+    assert detail["match"]["winner"] is None
+    assert all(team["outcome"] == "unknown" for team in detail["teams"])
+    assert detail["teams"][1]["players"][0]["outcome"] == "unknown"
+    h.client.match.assert_awaited_once_with("loss")
+
+
+async def test_damage_exchange_uses_recent_complete_pairs_and_analysis_dmr_only_in_matching_detail(h):
+    h.player.analysis = {"trend": {"points": [
+        {"matchId": "other", "dmr": 99}, {"matchId": "partial", "dmr": 3.5},
+    ]}}
+    matches = [
+        h.m.Match(mid, players=[h.m.Participant(h.player.id, "A", team="0",
+                                              damage_dealt=dealt, damage_received=received)])
+        for mid, dealt, received in (("partial", 5000, None), ("first", 300, 100), ("second", 100, 300))
+    ]
+    h.client.recent.return_value = h.result(matches)
+    overview = (await h.run("stats stb:001")).view
+    damage = next(metric for metric in overview["metrics"] if metric["label"] == "近期伤害交换比")
+    assert damage == {"label": "近期伤害交换比", "value": 1, "sample_size": 2,
+                      "window_size": 3, "note": "2/3 场有数据"}
+    h.client.recent.return_value = h.result(matches[:1])
+    overview = (await h.run("stats stb:001")).view
+    assert not any("伤害交换比" in metric["label"] for metric in overview["metrics"])
+    h.client.match.assert_not_awaited()
+
+    raw, fallback, unrelated = (
+        h.modules.service.match_view(h.result(match), h.player)["match"]
+        for match in (matches[1], matches[0], h.m.Match("unrelated", players=matches[0].players))
+    )
+    for detail, value, source in ((raw, 3, "match"), (fallback, 3.5, "analysis"), (unrelated, None, None)):
+        assert (detail["target_damage_exchange"], detail["target_damage_exchange_source"]) == (value, source)
+
+
+def test_team_comparisons_use_only_both_playing_teams_and_expose_partial_coverage(modules):
+    m = modules.models
+    observer = m.Participant("obs", "Observer", team="4", damage_dealt=99999)
+    a1 = m.Participant("a1", "A1", team="0", damage_dealt=0)
+    a2 = m.Participant("a2", "A2", team="0")
+    b = m.Participant("b", "B", team="1", damage_dealt=400)
+    match = m.Match("sample", players=[observer, b, a1, a2], winner_team="0")
+    view = modules.service.match_view(m.FetchResult(match, NOW))
+    assert [team["id"] for team in view["teams"]] == ["0", "1", "4"]
+    assert view["comparison_team_ids"] == ["0", "1"]
+    a, b_metric = [next(metric for metric in team["metrics"] if metric["key"] == "damage_dealt")
+                   for team in view["teams"][:2]]
+    assert (a["value"], a["observed_count"], a["participant_count"], a["complete"], a["note"]) == (
+        0, 1, 2, False, "1/2 人有数据")
+    assert (b_metric["value"], b_metric["complete"]) == (400, True)
+    assert view["teams"][2]["outcome"] == "unknown"
+    match.players.remove(b)
+    view = modules.service.match_view(m.FetchResult(match, NOW))
+    assert view["comparison_team_ids"] == []
+    assert view["teams"][-1]["players"][0]["id"] == "obs"
 
 
 async def test_service_real_client_pipeline_sorts_and_deduplicates_recent_samples(h, monkeypatch):

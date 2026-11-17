@@ -6,16 +6,19 @@
   <span class="metric-label">综合评分</span>
   <strong class="score {{ view.profile_rating.tone }}{% if view.profile_rating.score == '暂无' %} is-missing{% endif %}">{{ view.profile_rating.score }}</strong>
   {% if view.profile_rating.title %}<span class="grade-title">{{ view.profile_rating.title }}</span>{% endif %}
+  {% if view.profile_rating.sample %}<span class="grade-sample">{{ view.profile_rating.sample }}</span>{% endif %}
 </div>
 {% endblock %}
 {% block content %}
 {% set rating = view.profile_rating %}
 <section aria-labelledby="radar-heading">
-  <div class="radar-heading"><h2 id="radar-heading">五维表现</h2><span class="metric-label">刻度 0–100</span></div>
-  <svg class="radar" viewBox="0 0 360 211" role="img" aria-labelledby="radar-title radar-values">
+  {% if rating.facts %}
+  <div class="radar-heading"><h2 id="radar-heading">五维表现 <small class="radar-window">近期</small></h2>{% if rating.radar %}<span class="radar-key">中圈 50 · 胜率用实际 %</span>{% endif %}</div>
+  {% if rating.radar %}
+  <svg class="radar" viewBox="0 0 480 296" role="img" aria-labelledby="radar-title radar-values">
     <title id="radar-title">玩家五维表现</title>
     <desc id="radar-values">{% for axis in rating.axes %}{{ axis.label }} {{ axis.display }}{% if not loop.last %}，{% endif %}{% endfor %}</desc>
-    <g class="radar-grid">{% for ring in rating.rings %}<polygon points="{{ ring }}"/>{% endfor %}
+    <g class="radar-grid">{% for ring in rating.rings %}<polygon{% if loop.index == 2 %} class="radar-mid"{% endif %} points="{{ ring }}"/>{% endfor %}
       {% for axis in rating.axes %}<polyline points="{{ axis.line }}"/>{% endfor %}</g>
     {% if rating.polygon %}<polygon class="radar-area" points="{{ rating.polygon }}"/>{% endif %}
     {% for axis in rating.axes %}
@@ -23,6 +26,15 @@
       <text class="radar-label" x="{{ axis.x }}" y="{{ axis.y }}" text-anchor="{{ axis.anchor }}">{{ axis.label }}<tspan class="radar-value" x="{{ axis.x }}" dy="20">{{ axis.display }}</tspan></text>
     {% endfor %}
   </svg>
+  {% for axis in rating.axes if axis.note %}<p class="radar-sample">{{ axis.label }} · {{ axis.note }}</p>{% endfor %}
+  {% else %}
+  <dl class="profile-facts">
+    {% for axis in rating.facts %}
+    <div><dt>{{ axis.label }}</dt><dd>{{ axis.display }}{% if axis.note %}<small>{{ axis.note }}</small>{% endif %}</dd></div>
+    {% endfor %}
+  </dl>
+  {% endif %}
+  {% else %}<p id="radar-heading" class="scope">五维表现：暂无数据</p>{% endif %}
 </section>
 {% if view.categories or view.style_scope %}
 <section><h2 class="section-heading">{{ view.style_scope or '兵种风格' }}</h2>

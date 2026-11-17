@@ -148,30 +148,26 @@ def test_missing_metric_is_unknown_without_fake_zero_or_unit(view, value):
 
 def test_real_zero_and_unknown_stay_distinct(view):
     view.update(kind="recent", rows=[{
-        "id": "zero", "kills": 0, "losses": None, "destroyed_value": 0,
-        "lost_value": None, "unit_exchange": None, "value_exchange": None,
+        "id": "zero", "value_exchange": None,
         "duration_seconds": 0, "elo_delta": 0,
     }])
-    text = Renderer().text(view)
-    assert "击杀 / 阵亡 0 / 暂无" in text
-    assert "摧毁 / 损失 0 / 暂无" in text
-    assert "分值 K/D 暂无" in text
-    assert "胜负暂无" in text
-    assert "0分00秒" in text
-    assert "ELO +0" in text
+    renderer = Renderer()
+    for output in (renderer.text(view), VisibleHTML(renderer.template(view)).text):
+        for value in ("分值 K/D 暂无", "胜负暂无", "时长 0分00秒", "ELO +0"):
+            assert compact(value) in compact(output)
 
 
 def test_exchange_values_are_separate_and_not_recalculated(view):
-    view.update(kind="recent", rows=[{
+    view.update(kind="match", teams=[{"name": "A 队", "players": [{
         "id": "ratios", "kills": 8, "losses": 2, "unit_exchange": 4,
-        "destroyed_value": 2500.5, "lost_value": 2000.75, "value_exchange": 1.249,
-    }])
+        "destroyed_value": 2500.5, "lost_value": 0, "value_exchange": 1.249,
+    }]}])
     renderer = Renderer()
     html_text = compact(VisibleHTML(renderer.template(view)).text)
     text = renderer.text(view)
-    for expected in ["击杀 / 阵亡 8 / 2", "摧毁 / 损失 2,500.5 / 2,000.75", "分值 K/D 1.25"]:
-        assert expected in text
-        assert compact(expected.replace("：", "")) in html_text
+    for label, value in [("击杀 / 阵亡", "8 / 2"), ("摧毁 / 损失", "2,500.5 / 0"), ("分值 K/D", "1.25")]:
+        assert f"{label}：{value}" in text
+        assert compact(value) in html_text
 
 
 def test_stale_and_absent_timestamps_are_visible(view):
@@ -281,6 +277,7 @@ def test_analysis_units_maps_and_categories_share_values(view):
 @pytest.fixture
 def profile():
     return {"score": 5.8, "title": "泯然众人", "tone": "medium", "sample_size": 4,
+            "win_rate_sample": {"value": 0, "wins": 0, "losses": 6, "sample_size": 6, "window_size": 8},
             "dimensions": [{"key": key, "value": value}
                            for key, value in (("win_rate", 0), ("outcome", 71), ("obj", 16),
                                               ("contrib", 59), ("kd", 37))]}
@@ -292,10 +289,12 @@ def test_title_and_five_distinct_axes_belong_only_to_overview(view, profile, kin
     renderer = Renderer()
     parsed = VisibleHTML(renderer.template(view))
     for output in (parsed.text, renderer.text(view)):
-        for value in ("泯然众人", "五维表现", "分值 K/D 37", "摧毁贡献 59", "占点贡献 16", "胜负预期 71", "实际胜率 0%"):
+        for value in ("泯然众人", "4 场有效", "五维表现", "交换效率 37", "摧毁贡献 59",
+                      "夺点表现 16", "赛果超预期 71", "实际胜率 0%", "近 8 场 · 0 胜 6 负 · 6 场有赛果"):
             assert (compact(value) in compact(output)) == (kind == "overview")
     assert sum(attrs.get("class") == "radar-area" for _, attrs in parsed.tags) == (kind == "overview")
     assert sum(attrs.get("class") == "radar-dot" for _, attrs in parsed.tags) == (5 if kind == "overview" else 0)
+    assert sum(attrs.get("class") == "radar-mid" for _, attrs in parsed.tags) == (kind == "overview")
 
 
 @pytest.mark.parametrize("value", [None, float("nan"), -1, 101])
@@ -307,46 +306,106 @@ def test_missing_radar_axis_keeps_real_zero_without_filling_polygon(view, profil
     parsed = VisibleHTML(renderer.template(view))
     for output in (parsed.text, renderer.text(view)):
         assert "综合评分暂无" in compact(output)
-        assert "胜负预期暂无" in compact(output) and "实际胜率0%" in compact(output)
+        assert "赛果超预期暂无" in compact(output) and "实际胜率0%" in compact(output)
         assert profile["title"] not in output
     assert not any(attrs.get("class") == "radar-area" for _, attrs in parsed.tags)
     assert sum(attrs.get("class") == "radar-dot" for _, attrs in parsed.tags) == 4
 
 
-def test_recent_score_precedes_match_and_has_color_without_title(view):
-    view.update(kind="recent", rows=[{"id":"42", "map_name":"Coast", "score":8.6, "score_band":"high"}])
+@pytest.mark.parametrize("sample", [1, 4, 5])
+def test_radar_win_rate_uses_its_own_known_results_and_threshold(view, profile, sample):
+    profile["win_rate_sample"].update(value=100, wins=sample, losses=0, sample_size=sample)
+    view["player"]["analysis"] = {"matchCount": 83}
+    view["style_scope"] = "近91场风格"
+    view.update(profile_rating=profile, metrics=[{"label": "分析样本胜率", "value": 60,
+                                                 "wins": 12, "sample_size": 20, "format": "percent"}])
+    renderer = Renderer()
+    parsed = VisibleHTML(renderer.template(view))
+    assert sum(attrs.get("class") == "radar-dot" for _, attrs in parsed.tags) == (4 if sample < 5 else 5)
+    for output in (parsed.text, renderer.text(view)):
+        if sample < 5:
+            assert f"实际胜率{sample}胜0负" in compact(output)
+            assert "100%" not in output
+            assert f"{sample} 场有赛果" in output
+        else:
+            assert "实际胜率100%" in compact(output) and "5 胜 0 负 · 5 场有赛果" in output
+        for label in ("4 场有效", "近83场胜率", "12 胜 8 负 · 20 场有赛果", "近 8 场"):
+            assert label in output
+        assert "近91场胜率" not in output and "83 场有赛果" not in output
+
+
+def test_sparse_profile_uses_fact_list_and_retains_real_zero(view, profile):
+    profile["dimensions"] = [{"key": "kd", "value": 0}, {"key": "obj", "value": 25}]
+    view["profile_rating"] = profile
     renderer = Renderer()
     html = renderer.template(view)
+    assert 'class="profile-facts"' in html and 'class="radar"' not in html
+    for output in (VisibleHTML(html).text, renderer.text(view)):
+        for value in ("交换效率 0", "实际胜率 0%"):
+            assert compact(value) in compact(output)
+        assert "赛果超预期" not in output and "摧毁贡献" not in output
+
+
+def test_empty_profile_shows_one_unknown_line_without_axis_list(view, profile):
+    profile.update(dimensions=[], win_rate_sample={"sample_size": 0, "wins": 0}, score=None)
+    view["profile_rating"] = profile
+    renderer = Renderer()
+    html = renderer.template(view)
+    assert 'class="profile-facts"' not in html and 'class="radar"' not in html
+    for output in (VisibleHTML(html).text, renderer.text(view)):
+        assert output.count("五维表现：暂无数据") == 1
+        assert "实际胜率" not in output and "交换效率" not in output
+
+
+def test_recent_score_precedes_match_and_has_color_without_title(view):
+    view.update(kind="recent", metrics=[], rows=[{"id": "42", "map_name": "Coast", "score": 8.6, "score_band": "high",
+                                                  "outcome": "win", "elo_delta": 15, "value_exchange": 1.42,
+                                                  "duration_seconds": 90, "kills": 4, "losses": 0}])
+    renderer = Renderer()
+    page, = renderer.views(view)
+    html = renderer.template(page)
     assert 'class="score high"' in html
-    text = renderer.text(view)
-    assert text.index("评分 8.6") < text.index("Coast") < text.index("#42")
-    assert "龙蛆" not in text and "称号" not in text
+    text = renderer.text(page)
+    assert "评分 8.6 · Coast · 胜利 · ELO +15\n分值 K/D 1.42 · 时长 1分30秒 · #42" in text
+    for output in (text, VisibleHTML(html).text):
+        values = ["评分", "Coast", "胜利", "ELO", "分值 K/D", "时长", "#42"]
+        assert [output.index(value) for value in values] == sorted(output.index(value) for value in values)
+        assert all(output.count(value) == 1 for value in values)
+        assert "第 1/1 页" not in output and "击杀 / 阵亡" not in output
 
 
 def test_match_retains_known_target_result_and_fractional_resource_values(view):
     view.update(kind="match", match={"id": "42", "target_outcome": "loss"}, teams=[
         {"name": "A 队", "players": [{"id": view["player"]["id"], "name": "查询玩家",
-                                      "objectives": 3, "spawned_value": 1234.5, "supply": 12.5}]},
+                                      "objectives": 3, "spawned_value": 1234.5, "supply": 12.5},
+                                     {"id": "other", "name": "另一玩家", "spawned_value": 991171}]},
     ])
     renderer = Renderer()
     for output in (renderer.text(view), VisibleHTML(renderer.template(view)).text):
-        for value in ("失利", "1234.50", "12.50", "占点"):
+        for value in ("失利", "1,234.5", "12.5", "占点"):
             assert value in output
+        assert "另一玩家" in output and "991,171" not in output
+    assert renderer.template(view).count('class="participant-detail target"') == 1
+    direct = {key: value for key, value in view.items() if key != "player"}
+    assert 'class="participant-detail' not in renderer.template(direct)
+    assert "1,234.5" not in renderer.text(direct)
 
 
 def test_match_sections_and_footer_are_shared_across_cards(view):
-    view.update(kind="match", match={"id":"42"}, prediction={"a":64,"b":36}, teams=[
+    view.update(kind="match", match={"id":"42"}, prediction={"a":63.5,"b":36.5}, teams=[
         {"name":"A 队", "metrics":[{"label":"击杀", "value":234,"format":"integer"}],
-         "composition":[{"name":"步兵", "percentage":60}], "players":[{"id":"a","name":"甲"}]},
+         "composition":[{"name":"步兵", "percentage":60}], "players":[{"id":view["player"]["id"],"name":"甲","elo_before":1500}]},
         {"name":"B 队", "metrics":[{"label":"击杀", "value":227,"format":"integer"}],
-         "composition":[{"name":"装甲", "percentage":40}], "players":[{"id":"b","name":"乙"}]},
+         "composition":[{"name":"装甲", "percentage":40}], "players":[{"id":"b","name":"乙","elo_before":1400}]},
     ])
     renderer = Renderer()
     html = renderer.template(view)
     assert html.index("赛前预测") < html.index("兵种构成") < html.index("双方对比") < html.index("队伍玩家") < html.index('class="team"')
     assert 'class="match-columns"' in html
+    assert html.count("<thead>") == 1 and html.count('<tbody class="team">') == 2
+    assert html.count('class="participant target"') == 1
     for output in (renderer.text(view), VisibleHTML(html).text):
-        for value in ("64.00%", "36.00%", "234", "227", "步兵", "60.00%", "甲", "乙"):
+        for value in ("64%", "36%", "234", "227", "步兵", "60%", "甲", "乙", "查询玩家"):
             assert value in output
     assert "timeance/astrbot_plugin_BA_stats" in html and "数据来源 BATracer" in html
     assert "data:image/svg+xml;base64," in html
@@ -378,59 +437,91 @@ def test_comparison_uses_one_continuous_bar_and_raw_denominator(view, values, ex
         {"name": name, "metrics": [{"label": "伤害", "value": value}]}
         for name, value in zip(("A 队", "B 队"), values)
     ])
-    html = Renderer().template(view)
+    renderer = Renderer()
+    html = renderer.template(view)
     tags = VisibleHTML(html).tags
     tracks = [attrs for tag, attrs in tags if "comparison-track" in attrs.get("class", "").split()]
     segments = [attrs for tag, attrs in tags if "segment" in attrs.get("class", "").split()]
-    assert len(tracks) == 1
     if expected is None:
-        assert segments == [] and "no-comparison" in tracks[0]["class"]
+        assert not tracks and not segments
     else:
+        assert len(tracks) == 1
         widths = [float(attrs["style"].removeprefix("width:").removesuffix("%")) for attrs in segments]
         assert widths == pytest.approx([expected, 100 - expected])
         assert [attrs["class"] for attrs in segments] == ["segment side-a", "segment side-b"]
     if None in values:
-        assert "暂无" in tracks[0]["aria-label"]
+        assert f"伤害：{' / '.join('暂无' if value is None else str(value) for value in values)}" in renderer.text(view)
     elif values == (0, 0):
-        assert "A 队 0，B 队 0" in tracks[0]["aria-label"]
+        assert "伤害：0 / 0" in renderer.text(view)
+
+
+def test_partial_team_metric_keeps_values_and_coverage_but_has_no_bar(view):
+    view.update(kind="match", teams=[
+        {"id": "1", "name": "B 队", "metrics": [{"label": "伤害", "value": 40, "complete": True}]},
+        {"id": "0", "name": "A 队", "metrics": [{"label": "伤害", "value": 0, "complete": False, "note": "1/2 人有数据"}]},
+    ])
+    renderer = Renderer()
+    parsed = VisibleHTML(renderer.template(view))
+    assert not any(attrs.get("class") == "comparison-track" for _, attrs in parsed.tags)
+    assert "1/2 人有数据" in parsed.text
+    assert "伤害：0（1/2 人有数据） / 40" in renderer.text(view)
+
+
+@pytest.mark.parametrize("b_size,b_rating,roster_complete", [(0, 1700, None), (1, 1700, None), (2, None, None), (2, 1700, False)])
+def test_prediction_needs_equal_formal_rosters_and_all_ratings(view, b_size, b_rating, roster_complete):
+    spectator = {"id": "4", "name": "观战", "players": [{"name": "观战者", "elo_before": 1700}] * 2,
+                 "metrics": [{"label": "伤害", "value": 987654}]}
+    team_a = {"id": "0", "name": "A 队", "players": [{"name": "A 玩家", "elo_before": 1550}] * 2,
+              "metrics": [{"label": "伤害", "value": 37}]}
+    teams = [spectator, team_a]
+    if b_size:
+        teams.insert(0, {"id": "1", "name": "B 队", "players": [{"name": "B 玩家", "elo_before": b_rating}] * b_size})
+    scope = "单局 · 详情收录 5 人 · 近期名单 7 人"
+    view.update(kind="match", teams=teams, prediction={"a": 60, "b": 40},
+                match={"roster_complete": roster_complete}, scope=scope)
+    renderer = Renderer()
+    html = renderer.template(view)
+    assert 'class="prediction-bar"' not in html
+    for output in (VisibleHTML(html).text, renderer.text(view)):
+        assert "暂无可用预测" in output and scope in output
+        assert "观战者" in output and "987654" not in output and "60%" not in output
+    assert "伤害：37 / 暂无" in renderer.text(view)
 
 
 def test_composition_compares_each_original_share_with_one_shared_bar(view):
     view.update(kind="match", teams=[
         {"name": "A 队", "composition": [{"name": "装甲", "percentage": 40}, {"name": "步兵", "percentage": 60}]},
-        {"name": "B 队", "composition": [{"name": "装甲", "percentage": 20}, {"name": "步兵", "percentage": 30}]},
+        {"name": "B 队", "composition": [{"name": "装甲", "percentage": 20}, {"name": "步兵", "percentage": 80}]},
     ])
     html = Renderer().template(view)
     tags = VisibleHTML(html).tags
-    tracks = [attrs for _, attrs in tags if attrs.get("role") == "img"]
+    tracks = [attrs for _, attrs in tags if attrs.get("class") == "comparison-track"]
     segments = [attrs for _, attrs in tags if "role-a" in attrs.get("class", "") or "role-b" in attrs.get("class", "")]
     assert len(tracks) == 2 and len(segments) == 4
     assert [attrs["class"] for attrs in segments] == ["segment role-armor role-a", "segment role-armor role-b",
                                                       "segment role-infantry role-a", "segment role-infantry role-b"]
     widths = [float(attrs["style"].removeprefix("width:").removesuffix("%")) for attrs in segments]
-    assert widths == pytest.approx([100 * 40 / 60, 100 * 20 / 60, 100 * 60 / 90, 100 * 30 / 90])
-    assert "A 队 40.00%，B 队 20.00%" in tracks[0]["aria-label"]
-    assert "A 队 60.00%，B 队 30.00%" in tracks[1]["aria-label"]
-    assert "左 A 队（深）· 右 B 队（浅）" in VisibleHTML(html).text
-    assert "composition-stack" not in html
+    assert widths == pytest.approx([100 * 40 / 60, 100 * 20 / 60, 100 * 60 / 140, 100 * 80 / 140])
+    assert "装甲：40% / 20%" in Renderer().text(view)
+    assert "步兵：60% / 80%" in Renderer().text(view)
+    assert "左A队（深）右B队（浅）" in compact(VisibleHTML(html).text)
 
 
 @pytest.mark.parametrize("a,b,expected", [(0, 0, None), (None, 20, None), (20, None, None), (0, 20, 0)])
 def test_composition_distinguishes_zero_and_missing_share(view, a, b, expected):
     view.update(kind="match", teams=[
-        {"name": name, "composition": [{"name": "装甲", "percentage": value}]}
+        {"name": name, "composition": [{"name": "装甲", "percentage": value}] +
+         ([{"name": "步兵", "percentage": 100 - value}] if value is not None else [])}
         for name, value in zip(("A 队", "B 队"), (a, b))
     ])
     tags = VisibleHTML(Renderer().template(view)).tags
-    segments = [attrs for _, attrs in tags if "segment" in attrs.get("class", "").split()]
-    track = next(attrs for _, attrs in tags if attrs.get("role") == "img")
+    segments = [attrs for _, attrs in tags if "role-armor" in attrs.get("class", "").split()]
     if expected is None:
-        assert not segments and "no-comparison" in track["class"]
+        assert not segments
     else:
         assert float(segments[0]["style"].removeprefix("width:").removesuffix("%")) == expected
-    assert ("暂无" in track["aria-label"]) is (a is None or b is None)
-    if a == b == 0:
-        assert "A 队 0.00%，B 队 0.00%" in track["aria-label"]
+    expected_values = " / ".join(f"{value}%" if value is not None else "暂无" for value in (a, b))
+    assert f"装甲：{expected_values}" in Renderer().text(view)
 
 
 def test_only_complete_composition_can_supply_an_omitted_zero_category(view):
@@ -438,9 +529,10 @@ def test_only_complete_composition_can_supply_an_omitted_zero_category(view):
         {"name": "A 队", "composition": [{"name": "步兵", "percentage": 100}]},
         {"name": "B 队", "composition": [{"name": "装甲", "percentage": 30}]},
     ])
-    tracks = [attrs for _, attrs in VisibleHTML(Renderer().template(view)).tags if attrs.get("role") == "img"]
-    assert "A 队 0.00%，B 队 30.00%" in tracks[0]["aria-label"]
-    assert "A 队 100.00%，B 队 暂无" in tracks[1]["aria-label"]
+    renderer = Renderer()
+    assert not any(attrs.get("class") == "comparison-track" for _, attrs in VisibleHTML(renderer.template(view)).tags)
+    text = renderer.text(view)
+    assert "装甲：0% / 30%" in text and "步兵：100% / 暂无" in text
 
 
 def test_unknown_composition_is_not_rendered_as_zero_or_renormalized(view):

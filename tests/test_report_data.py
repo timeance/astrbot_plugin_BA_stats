@@ -63,15 +63,18 @@ def metrics(view):
     return {metric["label"]: metric for metric in view["metrics"]}
 
 
-async def test_overview_separates_analysis_denominator_recent_values_and_single_match_dmr(report):
+async def test_overview_uses_distinct_results_and_pairs_damage_in_the_recent_window(report):
     player = report.player({"matchCount": 80, "trend": {"points": [
         {"matchId": "win", "won": True, "dmr": 2.5, "endTime": "2026-11-16T00:00:00Z"},
         {"matchId": "loss", "won": False, "dmr": 9, "endTime": "2026-11-15T00:00:00Z"},
         {"matchId": "unknown", "endTime": "2026-11-14T00:00:00Z"},
         {"matchId": "analysis-only", "won": True},
+        {"won": False},
     ]}})
     matches = [recent(report, "win"), recent(report, "loss", destroyed=200, lost=75),
                recent(report, "unmatched", destroyed=None, lost=999)]
+    for match, (dealt, received) in zip(matches, [(100, 20), (20, 40), (990, None)]):
+        match.players[0].damage_dealt, match.players[0].damage_received = dealt, received
     original_player, original_matches = deepcopy(player), deepcopy(matches)
     view = await report.run(player, matches)
     data = metrics(view)
@@ -81,7 +84,10 @@ async def test_overview_separates_analysis_denominator_recent_values_and_single_
     dims = {axis["key"]: axis["value"] for axis in view["profile_rating"]["dimensions"]}
     assert dims["win_rate"] == 50  # Only the win and loss are in the recent sample.
     assert dims["outcome"] is None  # Team ELO is missing, but the actual outcomes are known.
-    assert data["单局伤害交换比"]["value"] == 2.5
+    assert data["近期伤害交换比"]["value"] == 2  # (100 + 20) / (20 + 40), not the last match's dmr.
+    assert data["近期伤害交换比"]["sample_size"] == 2
+    assert data["分析样本胜率"]["sample_size"] == 3
+    assert view["profile_rating"]["win_rate_sample"] == {"wins": 1, "losses": 1, "sample_size": 2, "value": 50}
     assert view["style_scope"] == "近80场风格"
     assert view["scope"] == "近期3场 · 11-17—11-17"
     assert [row["outcome"] for row in view["rows"]] == ["win", "loss", "unknown"]
@@ -149,7 +155,8 @@ async def test_analysis_empty_lists_remain_empty_without_inventing_statistics(re
     assert view["common_units"] == view["map_stats"] == view["categories"] == []
     assert metrics(view)["近期分值 K/D"]["value"] is None
     assert metrics(view)["分析样本胜率"]["value"] is None
-    assert metrics(view)["单局伤害交换比"]["value"] is None
+    assert "单局伤害交换比" not in metrics(view)
+    assert "近期伤害交换比" not in metrics(view)
     assert view["style_scope"] == "近0场风格"
     assert view["rows"][0]["map_name"] == "地图#20"
 
@@ -192,12 +199,13 @@ def test_match_team_metrics_sum_known_values_show_coverage_and_leave_missing_out
     first = {item["label"]: item for item in view["teams"][0]["metrics"]}
     assert {key: item["value"] for key, item in first.items()} == {
         "摧毁分": 350, "损失分": 100, "赛后平均 ELO": 1100, "击杀": 5, "阵亡": 1, "伤害": 500,
-        "出兵花费": 1000, "占点": 0, "补给": 10,
+        "出动价值": 1000, "占点": 0, "补给": 10,
     }
     assert first["伤害"]["note"] == "1/2 人有数据"
-    assert first["出兵花费"]["note"] == first["占点"]["note"] == first["补给"]["note"] == "1/2 人有数据"
+    assert first["出动价值"]["note"] == first["占点"]["note"] == first["补给"]["note"] == "1/2 人有数据"
     assert view["teams"][1]["metrics"] == []
     a, b = view["teams"][0]["players"]
+    assert a["damage_exchange"] == "无承伤"
     assert (a["damage_dealt"], a["damage_received"], a["objectives"], a["spawned_value"], a["supply"]) == (500, 0, 0, 1000, 10)
     assert (b["damage_dealt"], b["damage_received"], b["objectives"], b["spawned_value"], b["supply"]) == (None,) * 5
 
@@ -268,7 +276,7 @@ async def test_overview_renders_aggregate_and_separate_observed_win_rate(report)
     assert (rating["score"], rating["title"]) == (7.9, "有龙样")
     assert [axis["value"] for axis in rating["dimensions"]] == [91, 53, 53, 92, 100]
     for output in (Renderer().template(view), Renderer().text(view)):
-        assert all(term in output for term in ("7.9", "有龙样", "胜负预期", "胜率", "100%"))
+        assert all(term in output for term in ("7.9", "有龙样", "赛果超预期", "胜率"))
     report.client.match.assert_not_awaited()
 
 
@@ -288,7 +296,7 @@ def test_match_prediction_composition_and_a_b_order_reach_both_renderers(report)
     assert "1 人缺单位数据" in view["teams"][2]["composition_note"]
     renderer = Renderer()
     for output in (renderer.template(view), renderer.text(view)):
-        assert "35.99%" in output and "64.01%" in output
+        assert "36%" in output and "64%" in output
         assert "装甲" in output and "步兵" in output
         assert output.index("A 队") < output.index("B 队")
     assert match == before

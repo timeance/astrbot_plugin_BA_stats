@@ -10,7 +10,7 @@ import time
 
 from .client import participant_for
 from .commands import Request, Target
-from .models import FetchResult, Match, Participant, Player
+from .models import FetchResult, Match, Participant, Player, analysis_outcomes, win_rate_sample
 from .pending import PendingManager
 from .scoring import match_prediction, profile_rating, recent_score, score_band, team_composition
 from .storage import Binding
@@ -39,11 +39,11 @@ class Response:
     instructions: tuple[tuple[str, str], ...] = ()
 
 
-def ratio(numerator, denominator):
+def ratio(numerator, denominator, zero_label="无损失"):
     if numerator is None or denominator is None:
         return None
     if denominator == 0:
-        return "无损失" if numerator > 0 else None
+        return zero_label if numerator > 0 else None
     return numerator / denominator
 
 
@@ -61,21 +61,16 @@ def participant_view(p: Participant):
                 lost_value=p.lost_value, unit_exchange=ratio(p.kills, p.losses),
                 value_exchange=ratio(p.destroyed_value, p.lost_value),
                 damage_dealt=p.damage_dealt, damage_received=p.damage_received,
+                damage_exchange=ratio(p.damage_dealt, p.damage_received, "无承伤"),
                 objectives=p.objectives, spawned_value=p.spawned_value, supply=p.supply,
                 outcome=p.outcome, outcome_source=None)
 
 
-def analysis_outcomes(player):
-    """Only explicit booleans for this player's exact match IDs can supply results."""
-    outcomes = {}
-    for point in player.analysis.get("trend", {}).get("points", []):
-        mid = point.get("matchId")
-        if mid is not None:
-            known = outcomes.setdefault(mid, set())
-            if isinstance(point.get("won"), bool):
-                known.add(point["won"])
-    return {mid: ("win" if True in known else "loss") if len(known) == 1 else "unknown"
-            for mid, known in outcomes.items()}
+def outcome_view(result):
+    known = result in ("win", "loss")
+    return {"outcome": result if known else "unknown",
+            "outcome_source": "analysis" if known else None,
+            "outcome_conflict": result == "conflict"}
 
 
 def map_name(match, player=None):
@@ -88,21 +83,23 @@ def map_name(match, player=None):
 
 def recent_rows(matches, player_id, player=None, *, with_scores=True):
     rows = []
-    outcomes = analysis_outcomes(player) if player is not None and player.id == player_id else {}
+    analysis = player.analysis if player is not None and player.id == player_id else None
+    outcomes = analysis_outcomes(analysis)
     for match in matches:
         person = participant_for(match, player_id)
         if person is None:
             continue
         row = participant_view(person)
+        result = outcomes.get(match.id)
         if with_scores:
-            score = recent_score(match, person, player.analysis if player is not None and player.id == player_id else None)
-            row.update(score=score, score_band=score_band(score))
-        outcome = outcomes.get(match.id, person.outcome)
+            score = recent_score(match, person, analysis)
+            row.update(score=score, score_band=score_band(score),
+                       score_outcome_source=("analysis" if result is not None else "elo_delta")
+                       if score is not None else None)
         row.update(id=match.id, started_at=match.started_at, ended_at=match.ended_at,
                    map_name=map_name(match, player),
-                   mode=match.mode, outcome=outcome,
-                   outcome_source="analysis" if outcomes.get(match.id) in {"win", "loss"} else None,
-                   duration_seconds=match.duration_seconds, source_url=match.source_url)
+                   mode=match.mode, duration_seconds=match.duration_seconds,
+                   source_url=match.source_url, **outcome_view(result))
         rows.append(row)
     return rows
 
@@ -113,37 +110,50 @@ def team_metrics(players):
         ("destroyed_value", "摧毁分", "decimal"), ("lost_value", "损失分", "decimal"),
         ("elo", "赛后平均 ELO", "decimal"), ("kills", "击杀", "integer"),
         ("losses", "阵亡", "integer"), ("damage_dealt", "伤害", "decimal"),
-        ("spawned_value", "出兵花费", "decimal"), ("objectives", "占点", "integer"),
+        ("spawned_value", "出动价值", "decimal"), ("objectives", "占点", "integer"),
         ("supply", "补给", "decimal"),
     ):
         values = [p[field] for p in players if p[field] is not None]
         if not values:
             continue
         value = sum(values) / len(values) if field == "elo" else sum(values)
-        metric = {"label": label, "value": value, "format": style}
-        if len(values) != len(players):
+        complete = len(values) == len(players)
+        metric = {"key": field, "label": label, "value": value, "format": style,
+                  "observed_count": len(values), "participant_count": len(players),
+                  "complete": complete}
+        if not complete:
             metric["note"] = f"{len(values)}/{len(players)} 人有数据"
         metrics.append(metric)
     return metrics
 
 
-def match_view(result, player=None):
+def match_view(result, player=None, *, recent_match=None):
     match = result.data
     target = participant_for(match, player.id) if player is not None else None
-    target_outcome = analysis_outcomes(player).get(match.id, "unknown") if target is not None else "unknown"
+    target_result = outcome_view(analysis_outcomes(player.analysis).get(match.id) if target is not None else None)
+    target_damage = target_damage_source = None
+    if target is not None:
+        if target.damage_dealt is not None and target.damage_received is not None:
+            target_damage = ratio(target.damage_dealt, target.damage_received, "无承伤")
+            target_damage_source = "match" if target_damage is not None else None
+        else:
+            target_damage = next((point["dmr"] for point in player.analysis.get("trend", {}).get("points", [])
+                                  if point.get("matchId") == match.id and point.get("dmr") is not None), None)
+            target_damage_source = "analysis" if target_damage is not None else None
     teams = OrderedDict()
+    winner_team = match.winner_team if match.winner_team in ("0", "1") else None
     for person in match.players:
         key = person.team
         if key not in teams:
-            teams[key] = {"name": {"0": "A 队", "1": "B 队"}.get(key, f"分队 {key if key is not None else '未知'}"),
+            teams[key] = {"id": key,
+                          "name": {"0": "A 队", "1": "B 队"}.get(key, f"分队 {key if key is not None else '未知'}"),
                           "outcome": "unknown", "players": []}
         row = participant_view(person)
-        if player is not None and person.player_id == player.id:
-            row.update(outcome=target_outcome,
-                       outcome_source="analysis" if target_outcome != "unknown" else None)
+        if person is target:
+            row.update(target_result, damage_exchange=target_damage)
         teams[key]["players"].append(row)
-        if match.winner_team is not None and person.team is not None:
-            teams[key]["outcome"] = "win" if person.team == match.winner_team else "loss"
+        if winner_team is not None and key in ("0", "1"):
+            teams[key]["outcome"] = "win" if key == winner_team else "loss"
     # Stable A/B ordering is independent of the source participant-map order.
     teams = OrderedDict(sorted(teams.items(), key=lambda pair: {"0": 0, "1": 1}.get(pair[0], 2)))
     for key, team in teams.items():
@@ -157,16 +167,32 @@ def match_view(result, player=None):
         if composition["missing_participants"]:
             notes.append(f"{composition['missing_participants']} 人缺单位数据，构成暂无")
         team["composition_note"] = "；".join(notes)
+    coverage = {}
+    coverage_labels = []
+    if recent_match is not None and recent_match.id == match.id:
+        for team_id, label in (("0", "A"), ("1", "B")):
+            known = {p.player_id for p in recent_match.players if p.team == team_id}
+            if not known:
+                continue
+            reported = {p["id"] for p in teams.get(team_id, {}).get("players", [])}
+            matched = len(known & reported)
+            coverage[team_id] = {"matched": matched, "known": len(known)}
+            coverage_labels.append(f"{label} {matched}/{len(known)}")
+    # The recent roster can prove a gap but cannot prove completeness.
+    roster_incomplete = any(c["matched"] < c["known"] for c in coverage.values())
     view = {"kind": "match", "match": {
         "id": match.id, "map_name": map_name(match, player), "mode": match.mode,
         "started_at": match.started_at, "ended_at": match.ended_at, "duration_seconds": match.duration_seconds,
-        "winner": {"0": "A 队", "1": "B 队"}.get(match.winner_team, f"分队 {match.winner_team}")
-                  if match.winner_team is not None else None,
-        "target_outcome": target_outcome,
-        "target_outcome_source": "analysis" if target_outcome != "unknown" else None,
-    }, "teams": list(teams.values()), "prediction": match_prediction(match),
+        "winner": {"0": "A 队", "1": "B 队"}.get(winner_team),
+        "target_damage_exchange": target_damage, "target_damage_exchange_source": target_damage_source,
+        **{f"target_{key}": value for key, value in target_result.items()},
+    }, "teams": list(teams.values()), "prediction": None if roster_incomplete else match_prediction(match),
+        "comparison_team_ids": ["0", "1"] if "0" in teams and "1" in teams else [],
         "scope": f"单局 · 实际收录 {len(match.players)} 名玩家",
         "source_url": match.source_url, **freshness(result)}
+    if roster_incomplete:
+        view["match"].update(roster_complete=False, roster_coverage=coverage)
+        view["scope"] += " · 同场已知名单覆盖：" + "、".join(coverage_labels)
     if player:
         view["player"] = asdict(player)
     if not match.complete:
@@ -200,19 +226,26 @@ def common_units(player, matches):
 
 
 def overview_metrics(player, rows):
-    pairs = [row for row in rows if row["destroyed_value"] is not None and row["lost_value"] is not None]
-    points = player.analysis.get("trend", {}).get("points", [])
-    known = [point["won"] for point in points if isinstance(point.get("won"), bool)]
-    dated = [point for point in points if point.get("endTime") is not None and point.get("dmr") is not None]
-    latest = max(dated, key=lambda point: point["endTime"]) if dated else None
-    return [
+    metrics = [
         {"label": "ELO", "value": player.elo},
-        {"label": "近期分值 K/D", "value": ratio(sum(row["destroyed_value"] for row in pairs),
-                                                   sum(row["lost_value"] for row in pairs)) if pairs else None},
-        {"label": "分析样本胜率", "value": 100 * sum(known) / len(known) if known else None,
-         "format": "percent"},
-        {"label": "单局伤害交换比", "value": latest["dmr"] if latest else None},
     ]
+    for label, numerator, denominator, zero_label in (
+        ("近期分值 K/D", "destroyed_value", "lost_value", "无损失"),
+        ("近期伤害交换比", "damage_dealt", "damage_received", "无承伤"),
+    ):
+        pairs = [(row[numerator], row[denominator]) for row in rows
+                 if row[numerator] is not None and row[denominator] is not None]
+        if not pairs and numerator == "damage_dealt":
+            continue
+        metric = {"label": label,
+                  "value": ratio(sum(a for a, _ in pairs), sum(b for _, b in pairs), zero_label) if pairs else None,
+                  "sample_size": len(pairs), "window_size": len(rows)}
+        if len(pairs) != len(rows):
+            metric["note"] = f"{len(pairs)}/{len(rows)} 场有数据"
+        metrics.append(metric)
+    metrics.insert(2, {"label": "分析样本胜率", "format": "percent",
+                       **win_rate_sample(analysis_outcomes(player.analysis).values())})
+    return metrics
 
 
 class StatsService:
@@ -387,7 +420,7 @@ STB ID：{binding.player_id}
                     if getattr(exc, "code", "") in {"not_found", "not_recorded", "no_data"}:
                         continue
                     raise
-                view = match_view(detail, player)
+                view = match_view(detail, player, recent_match=match)
                 view.update(freshness(player_result, result, detail))
                 return Response(view=view)
             return Response(f"{player.name} · STB ID：{player.id}\n当前返回样本中暂无可用单局战报。\n{player.source_url or ''}")
@@ -404,10 +437,7 @@ STB ID：{binding.player_id}
             if len(times) != len(rows):
                 view["scope"] += f"（{len(times)}/{len(rows)} 场有开始时间）"
         if view["kind"] == "overview":
-            # The profile uses recent matches; the metric grid retains the full analysis sample.
-            results = [r["outcome"] for r in rows[:20] if r["outcome_source"] == "analysis"]
-            win_rate = 100 * results.count("win") / len(results) if results else None
-            view["profile_rating"] = profile_rating(matches, player.id, player.analysis, win_rate)
+            view["profile_rating"] = profile_rating(matches, player.id, player.analysis)
             view["metrics"] = overview_metrics(player, rows)
             view["common_units"] = common_units(player, matches)
             view["map_stats"] = [{"name": m["mapName"] or f"地图#{m['mapId']}",
