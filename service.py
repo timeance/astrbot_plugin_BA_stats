@@ -52,7 +52,7 @@ def freshness(*results):
 
 
 def participant_view(p: Participant):
-    return dict(id=p.player_id, name=p.name, elo=p.elo, elo_delta=p.elo_delta,
+    return dict(id=p.player_id, name=p.name, elo=p.elo, elo_before=p.elo_before, elo_delta=p.elo_delta,
                 kills=p.kills, losses=p.losses, destroyed_value=p.destroyed_value,
                 lost_value=p.lost_value, unit_exchange=ratio(p.kills, p.losses),
                 value_exchange=ratio(p.destroyed_value, p.lost_value),
@@ -106,7 +106,7 @@ def team_metrics(players):
     metrics = []
     for field, label, style in (
         ("destroyed_value", "摧毁分", "decimal"), ("lost_value", "损失分", "decimal"),
-        ("elo", "平均 ELO", "decimal"), ("kills", "击杀", "integer"),
+        ("elo", "赛后平均 ELO", "decimal"), ("kills", "击杀", "integer"),
         ("losses", "阵亡", "integer"), ("damage_dealt", "伤害", "decimal"),
         ("spawned_value", "出兵花费", "decimal"), ("objectives", "占点", "integer"),
         ("supply", "补给", "decimal"),

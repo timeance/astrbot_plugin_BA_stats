@@ -1,16 +1,16 @@
 # 验证记录
 
-验证日期：2026-11-17（Asia/Hong_Kong）。版本：v0.1.3。
+验证日期：2026-11-18（Asia/Hong_Kong）。版本：v0.1.4。
 
 ## 本次结果
 
 | 项目 | 结果 |
 | --- | --- |
-| 完整离线测试 | **695 passed，33.35 秒** |
+| 完整离线测试 | **723 passed，31.67 秒** |
 | 评分与固定上游 TypeScript 对照 | **320 个合成样本一致**；中间值误差小于 1e-12 |
-| 三类战报本地渲染 | 沿用 v0.1.2 的 18 组 HTML/文字、36 张 PNG；本轮未修改战报版式 |
-| 设置中心本地交互 | 深色 390px、浅色 1100px 两组通过；4 张预览；新增发送方式保存检查 |
-| 依赖兼容性 | `uv pip check`：30 个已安装包兼容 |
+| 三类战报本地渲染 | 18 组 HTML/文字、36 张 PNG；无布局越界或外部请求 |
+| 设置中心本地交互 | 深色 390px、浅色 1100px 两组通过；4 张预览；验证浅色默认值及已保存深色配置 |
+| 依赖兼容性 | 依赖未变；沿用 v0.1.3 的 `uv pip check` 结果：30 个已安装包兼容 |
 | 完整 AstrBot 服务、真实渲染服务 | 未启动；按 v4.29.4 固定源码核对 API，使用事件与桥接桩验证 |
 | BATrace / QQ 实际联调 | 开发环境未调用；用户已提供候选结果和图片超时日志 |
 | 远端 PR / CI | 以对应 PR 的实时结果为准；本记录不表示已合并或部署 |
@@ -24,8 +24,11 @@
 - 「评分」移植固定 ba-dragon 模型的逐局 career 计算，按分数着色，不展示称号。保留 MIT 来源与完整许可。
 - Oracle 包含原始 160 个样本，以及逐个删除 `StartTime` 的 160 个边界样本。开始/结束时间分别保留；不以结束时间减时长反推开始时间。近期列表按真实结束时间、缺少时按真实开始时间排序，两者都缺少才放最后。
 - 赛前预测使用 A/B 队全部必要赛前 ELO；兵种构成按已收录单位基础价格估算。缺少成员单位数据或存在未知价格时，不把已识别部分重新归一化为完整构成。
-- 单局图片按 900 CSS 像素渲染：顶部预测，中部左右对比/构成，底部玩家。其他卡片为 390 CSS 像素；运行仍使用 JPEG 85、ultra 像素比。
-- 所有图片页脚为本地内嵌 GitHub 头像、`timeance/astrbot_plugin_BA_stats` 和「数据来源 BATracer」。不在运行时请求头像。
+- 队伍摘要的赛前平均 ELO 使用传递到展示层的赛前值；本局 `NewRating` 标明为赛后平均 ELO，不将历史对局的赛后值称为当前值。
+- 单局图片按 900 CSS 像素渲染：顶部预测及 A/B 队伍摘要，中部左侧兵种构成、右侧双方对比，底部玩家。其他卡片为 390 CSS 像素；运行仍使用 JPEG 85、ultra 像素比。
+- 双方对比与逐兵种构成都共用左 A、右 B 的横条；兵种使用对应类别的同色系深浅色（A 深、B 浅）。构成数值保持双方各自占比，横条按这两个占比划分；缺失值与 0/0 不生成虚假的比例。
+- 所有图片页脚为本地内嵌 GitHub Logo、`timeance/astrbot_plugin_BA_stats` 和「数据来源 BATracer」。深浅主题分别使用官方白色与黑色 Logo，不在运行时请求素材。
+- 图片默认浅色；原生配置、独立设置中心和渲染器默认值一致，已保存的深色选择保持有效。图片缓存摘要包含完整 HTML，样式、主题和 Logo 变更会生成新缓存。
 
 ## 设置中心与诊断
 
@@ -35,7 +38,7 @@
 - API 使用 AstrBot 登录鉴权，插件额外检查用户名。未登录、已关闭、无效 JSON、非法类型/范围、保存失败及旧实例卸载有回归测试。下载不通过公开静态目录。
 - 诊断仅记录允许的事件与字段：请求耗时/状态、渲染及图片发送阶段、文件类型/大小、受控错误分类等。日志上限为 `30 * 1024 * 1024` 字节，旧段自动淘汰；关闭后可下载既有日志。
 - 记录器覆盖轮换、并发导出、关闭、磁盘失败及脱敏；不记录令牌、请求头、完整响应、聊天正文或图片内容。导出为 ZIP，不清空原日志。
-- 本地浏览器验证保存开关、下载路由、409 草稿保留、重新读取后保留草稿、待重载提示及固定总额度；新增验证 Base64 默认值，以及 file/url 保存后等待重载。合成桥接不替代真实宿主收发；常用设置全页预览将悬浮保存栏放到文档末尾，交互测试使用原样 CSS。
+- 本地浏览器验证保存开关、下载路由、409 草稿保留、重新读取后保留草稿、待重载提示及固定总额度；验证 Base64 默认值，以及 file/url 保存后等待重载。本轮增加图片浅色默认值、切换主题和保留已保存深色的检查。合成桥接不替代真实宿主收发；常用设置全页预览将悬浮保存栏放到文档末尾，交互测试使用原样 CSS。
 
 ## 图片发送与损坏缓存
 
@@ -55,21 +58,21 @@ v0.1.3 共用图片下载与验证流程：检查 HTTP 状态，限制下载大�
 ## 执行与证据
 
 ```powershell
-& ../.venv/Scripts/python.exe -X utf8 -m pytest -q --basetemp=../tmp/pytest-v013-portable --junitxml=../validation/pytest-v0.1.3.xml
-# 695 passed in 33.35s
+& ../.venv/Scripts/python.exe -X utf8 -m pytest -q --basetemp=../tmp/pytest-v014-reviewed --junitxml=../validation/pytest-v0.1.4.xml
+# 723 passed in 31.67s
 
-& ../.venv/Scripts/python.exe -X utf8 -B tools/render_previews.py --screenshots
-# v0.1.2 记录：18 HTML/text pairs; 36 screenshots; 0 layout/network failures
-# 本轮未修改战报版式，沿用对应预览，未重复运行此命令。
+& ../.venv/Scripts/python.exe -X utf8 -B tools/render_previews.py --screenshots --output ../tmp/report-visual-v014/previews
+# 18 HTML/text pairs; 36 screenshots; 0 layout/network failures
 
 & ../.venv/Scripts/python.exe -X utf8 -B tools/check_settings_view.py
 # 2 local browser scenarios passed; 4 screenshots; no external requests
 
-uv --cache-dir ../tmp/uv-cache pip check --python ../.venv/Scripts/python.exe
-# All installed packages are compatible
+# 依赖未变，沿用 v0.1.3：uv pip check，30 个已安装包兼容。
 ```
 
-主代理目视检查了近期浅色手机卡、玩家概览、单局深色宽图、常用设置浅色桌面页和诊断深色手机页。卡片矩阵含正常、长昵称、缺失数据三组，深浅两色，900/390px；预览均标明合成样本。浏览器拦截外部请求，只使用本地生成内容，没有使用外部账号或登录态。
+主代理目视检查了单局深浅两色宽图、单局缺失数据手机卡、近期浅色手机卡、玩家概览深色手机卡和常用设置浅色桌面页。卡片矩阵含正常、长昵称、缺失数据三组，深浅两色，900/390px；预览均标明合成样本。浏览器拦截外部请求，只使用本地生成内容，没有使用外部账号或登录态。
+
+本轮战报预览保存在会话目录的 `tmp/report-visual-v014/previews/`；设置中心预览位于 `previews/settings-*.png`。本地预览不随插件发布。
 
 会话目录：`H:/Codex/01a1e923-f766-7562-b804-35854a994fc4`。Python 3.11.4；Playwright 1.65.2，本地 Chromium 159.0.8154.6。主测试使用 httpx.MockTransport、临时 SQLite 和 AstrBot 桩；没有访问真实战绩、QQ 账号、数据库或运行配置。
 

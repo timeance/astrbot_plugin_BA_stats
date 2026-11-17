@@ -12,6 +12,8 @@
       --ink: #eff5ff; --muted: #b1bfd0; --line: #31445d;
       --accent: #79bfff; --win: #73deb5; --loss: #ffa5ae;
       --warning: #ffce80;
+      --team-a: #69adf0; --team-b: #f18477;
+      --team-a-panel: #102336; --team-b-panel: #302025;
     }
     [data-theme="light"] {
       color-scheme: light;
@@ -19,6 +21,8 @@
       --ink: #152944; --muted: #52647d; --line: #c3cfdd;
       --accent: #145d9c; --win: #07694d; --loss: #ab263d;
       --warning: #7a4b00;
+      --team-a: #2169b3; --team-b: #b83931;
+      --team-a-panel: #e6effa; --team-b-panel: #fbeceb;
     }
     * { box-sizing: border-box; }
     body {
@@ -89,21 +93,59 @@
     .score small { font-size: 11px; color: var(--muted); font-weight: 400; margin-bottom: 4px; }
     .score.low { color: var(--loss); } .score.medium { color: var(--ink); } .score.high { color: var(--warning); }
     .prediction { border: 1px solid var(--line); padding: 18px; background: var(--panel); }
-    .prediction-values { display: flex; justify-content: space-between; gap: 10px; margin: 12px 0; color: var(--accent); font-size: 24px; }
-    .prediction-values b:last-child { color: var(--loss); }
-    .prediction-bar { height: 9px; background: var(--loss); } .prediction-bar i { display: block; height: 100%; background: var(--accent); }
+    .prediction-values { display: flex; justify-content: space-between; gap: 10px; margin: 12px 0; color: var(--team-a); font-size: 24px; }
+    .prediction-values b:last-child { color: var(--team-b); }
+    .prediction-bar { height: 9px; background: var(--team-b); } .prediction-bar i { display: block; height: 100%; background: var(--team-a); }
+    .side-a { --side: var(--team-a); color: var(--team-a); }
+    .side-b { --side: var(--team-b); color: var(--team-b); }
+    .side-neutral { --side: var(--muted); }
+    .team-summaries { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--line); border-top: 0; }
+    .team-summary { min-width: 0; padding: 14px 18px 16px; border-top: 3px solid var(--side); background: var(--panel); }
+    .team-summary.side-a { background: var(--team-a-panel); }
+    .team-summary.side-b { background: var(--team-b-panel); }
+    .team-summary + .team-summary { border-left: 1px solid var(--line); }
+    .summary-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+    .summary-heading h2 { min-width: 0; overflow-wrap: anywhere; }
+    .summary-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; margin: 12px 0 0; color: var(--ink); }
+    .summary-metrics div { min-width: 0; }
+    .summary-metrics dt { color: var(--muted); font-size: 12px; }
+    .summary-metrics dd { margin: 2px 0 0; font-size: 21px; font-weight: 650; overflow-wrap: anywhere; }
     .match-columns { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 20px; }
     .match-columns > section { min-width: 0; }
-    .composition-heading { font-size: 16px; margin: 15px 0 8px; }
-    .role-row { display: grid; grid-template-columns: 4em 1fr 4em; gap: 6px; font-size: 13px; align-items: center; margin: 6px 0; }
-    .role-row b { font-weight: 400; text-align: right; }
-    .role-track { background: var(--subtle); height: 6px; } .role-track i { display: block; height: 100%; background: var(--accent); }
+    .comparison-key, .comparison-values, .comparison-notes { display: flex; justify-content: space-between; gap: 12px; }
+    .comparison-key { margin: 0 0 16px; }
+    .comparison-key > span { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+    .comparison-key > span:last-child { text-align: right; }
+    .comparison-list { margin: 0; }
+    .comparison-row { margin: 0 0 13px; }
+    .comparison-row dt { font-size: 13px; color: var(--muted); }
+    .comparison-row dd { margin: 2px 0 0; }
+    .comparison-values b { font-size: 16px; font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+    .comparison-values b:last-child { text-align: right; }
+    .comparison-track { display: flex; height: 9px; margin-top: 5px; background: var(--subtle); }
+    .comparison-track .segment { display: block; height: 100%; background: var(--side); }
+    .comparison-track.no-comparison { background: transparent; border-bottom: 1px solid var(--line); }
+    .comparison-notes { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .comparison-notes > :last-child { text-align: right; }
+    .composition-key { margin: 7px 0 16px; }
+    .composition-row { margin-bottom: 16px; }
+    .composition-row .comparison-track { height: 14px; }
+    .role-armor { --role: #8f9460; --role-light: #bec1a2; }
+    .role-infantry { --role: #6f9a79; --role-light: #adc7b3; }
+    .role-recon { --role: #4fa3a0; --role-light: #9dcfcd; }
+    .role-artillery { --role: #b07a4a; --role-light: #d3b394; }
+    .role-air-defense { --role: #8c7bb8; --role-light: #beb4d7; }
+    .role-helicopter { --role: #c08bb0; --role-light: #dbbdd1; }
+    .role-aircraft { --role: #9aa3ad; --role-light: #c4c9cf; }
+    .role-logistics, .role-other { --role: #898f97; --role-light: #bdc1c6; }
+    .comparison-track .role-a { background: var(--role); }
+    .comparison-track .role-b { background: var(--role-light); }
     .notes { margin-top: 20px; padding-left: 18px; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
     footer { border-top: 1px solid var(--line); margin-top: 26px; padding-top: 14px; color: var(--muted); font-size: 13px; }
     footer p + p { margin-top: 5px; }
     footer p { overflow-wrap: anywhere; }
     .attribution { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
-    .attribution img { width: 24px; height: 24px; border-radius: 50%; }
+    .attribution img { width: 24px; height: 24px; object-fit: contain; }
     .attribution a { color: var(--muted); font-size: 12px; }
     .stale { color: var(--warning); font-weight: 650; margin-bottom: 8px; }
     @media (max-width: 680px) {
@@ -120,6 +162,14 @@
       .participant .exchange { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .match-meta { padding: 14px; grid-template-columns: 1fr; gap: 10px; }
       .metric-label, .row-id, .participant-id, .metric-note, footer { font-size: 14px; }
+      .match-columns { grid-template-columns: 1fr; }
+      .team-summary { padding: 12px 10px; }
+      .summary-heading { flex-wrap: wrap; gap: 4px; }
+      .summary-heading h2 { font-size: 16px; }
+      .summary-heading .team-size { margin-left: 5px; font-size: 12px; }
+      .summary-metrics { grid-template-columns: 1fr; gap: 8px; }
+      .summary-metrics dd { font-size: 20px; }
+      .prediction-values { font-size: 20px; }
     }
   </style>
 </head>
@@ -150,7 +200,7 @@
   {% if view.notes %}<ul class="notes">{% for note in view.notes %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}
   <footer>
     {% if view.stale %}<p class="stale">旧缓存 · 抓取时间：{{ view.fetched_at }}</p>{% endif %}
-    <div class="attribution"><img src="{{ view.avatar }}" alt="GitHub 头像"><a href="https://github.com/timeance/astrbot_plugin_BA_stats" rel="noreferrer noopener">timeance/astrbot_plugin_BA_stats</a><span>数据来源 BATracer</span></div>
+    <div class="attribution"><img src="{{ view.github_logo }}" alt="GitHub Logo"><a href="https://github.com/timeance/astrbot_plugin_BA_stats" rel="noreferrer noopener">timeance/astrbot_plugin_BA_stats</a><span>数据来源 BATracer</span></div>
   </footer>
 </main>
 </body>

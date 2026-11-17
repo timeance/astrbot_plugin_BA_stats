@@ -29,6 +29,6 @@
 
 依赖由宿主环境安装，安装 ZIP 不附带第三方库；各依赖许可证以其发布包为准。预览工具使用本地 Playwright/Chromium，仅用于开发验收，运行插件不需要安装它们。
 
-`assets/github-avatar.png` 用于图片页脚的 GitHub 作者标识，与 `timeance/astrbot_plugin_BA_stats` 及「数据来源 BATracer」一同显示；不属于 ba-dragon 评分模型素材。
+`assets/github-mark-black.svg` 与 `assets/github-mark-white.svg` 来自 GitHub 官方 [Logo 素材包](https://brand.github.com/GitHub_Logos.zip)，用于图片页脚的项目链接。按主题内嵌对应黑白版本，与 `timeance/astrbot_plugin_BA_stats` 及「数据来源 BATracer」一同显示。
 
 `logo.png` 与 `assets/readme-logo.png` 原样来自用户交接包，交付时核对 SHA-256 一致。它们的授权与来源由交接提供方负责说明，本项目没有代替权利人作版权声明。

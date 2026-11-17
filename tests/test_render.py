@@ -1,8 +1,10 @@
 """Presentation/security behavior; fixed synthetic values, no browser or API."""
 
 from copy import deepcopy
+import base64
 from datetime import datetime, timezone
 from html.parser import HTMLParser
+from pathlib import Path
 import re
 
 from jinja2 import Environment
@@ -93,7 +95,7 @@ def test_external_text_is_escaped_in_every_card(view, kind):
     html = renderer.template(view)
     visible = VisibleHTML(html)
     assert "&lt;img" in html
-    assert not any(tag in {"script", "iframe"} or (tag == "img" and not attrs.get("src", "").startswith("data:image/png;base64,")) for tag, attrs in visible.tags)
+    assert not any(tag in {"script", "iframe"} or (tag == "img" and not attrs.get("src", "").startswith("data:image/svg+xml;base64,")) for tag, attrs in visible.tags)
     assert attack in visible.text
     assert attack in renderer.text(view)
 
@@ -153,7 +155,7 @@ def test_real_zero_and_unknown_stay_distinct(view):
     }])
     text = Renderer().text(view)
     assert "击杀 / 阵亡 0 / 暂无" in text
-    assert "摧毁 / 损失 0.00 / 暂无" in text
+    assert "摧毁 / 损失 0 / 暂无" in text
     assert "分值 K/D 暂无" in text
     assert "胜负暂无" in text
     assert "0分00秒" in text
@@ -268,7 +270,7 @@ def test_analysis_units_maps_and_categories_share_values(view):
                 map_stats=[{"name": "Coast", "count": 8, "win_rate": 50}])
     renderer = Renderer()
     for output in (renderer.text(view), VisibleHTML(renderer.template(view)).text):
-        for value in ("分析样本 100 场", "固定翼", "31.00%", "Tu-95", "72", "11683.00", "1.62", "Coast", "50.00%"):
+        for value in ("分析样本 100 场", "固定翼", "31%", "Tu-95", "72", "11683", "1.62", "Coast", "50%"):
             assert compact(value) in compact(output)
 
 
@@ -302,10 +304,124 @@ def test_match_sections_and_footer_are_shared_across_cards(view):
     ])
     renderer = Renderer()
     html = renderer.template(view)
-    assert html.index("赛前预测") < html.index("双方对比") < html.index("兵种构成") < html.index('class="team"')
+    assert html.index("赛前预测") < html.index("兵种构成") < html.index("双方对比") < html.index("队伍玩家") < html.index('class="team"')
     assert 'class="match-columns"' in html
     for output in (renderer.text(view), VisibleHTML(html).text):
         for value in ("64.00%", "36.00%", "234", "227", "步兵", "60.00%", "甲", "乙"):
             assert value in output
     assert "timeance/astrbot_plugin_BA_stats" in html and "数据来源 BATracer" in html
-    assert "data:image/png;base64," in html
+    assert "data:image/svg+xml;base64," in html
+
+
+@pytest.mark.parametrize("kind", ["overview", "recent", "match"])
+@pytest.mark.parametrize("theme,color", [("light", "black"), ("dark", "white")])
+def test_official_github_mark_is_embedded_in_every_card(view, kind, theme, color):
+    view["kind"] = kind
+    html = Renderer(theme=theme).template(view)
+    images = [attrs for tag, attrs in VisibleHTML(html).tags if tag == "img"]
+    assert len(images) == 1 and images[0]["alt"] == "GitHub Logo"
+    logo = base64.b64decode(images[0]["src"].split(",", 1)[1])
+    assert logo == (Path(__file__).parents[1] / "assets" / f"github-mark-{color}.svg").read_bytes()
+    assert "timeance/astrbot_plugin_BA_stats" in html and "数据来源 BATracer" in html
+
+
+def test_renderer_defaults_to_light():
+    assert 'data-theme="light"' in Renderer().template({"kind": "overview"})
+
+
+@pytest.mark.parametrize("values,expected", [
+    ((3, 1), 75), ((0, 3), 0), ((3, 0), 100),
+    ((1.005, 1.004), 1.005 / 2.009 * 100),
+    ((0, 0), None), ((None, 3), None), ((3, None), None),
+])
+def test_comparison_uses_one_continuous_bar_and_raw_denominator(view, values, expected):
+    view.update(kind="match", teams=[
+        {"name": name, "metrics": [{"label": "伤害", "value": value}]}
+        for name, value in zip(("A 队", "B 队"), values)
+    ])
+    html = Renderer().template(view)
+    tags = VisibleHTML(html).tags
+    tracks = [attrs for tag, attrs in tags if "comparison-track" in attrs.get("class", "").split()]
+    segments = [attrs for tag, attrs in tags if "segment" in attrs.get("class", "").split()]
+    assert len(tracks) == 1
+    if expected is None:
+        assert segments == [] and "no-comparison" in tracks[0]["class"]
+    else:
+        widths = [float(attrs["style"].removeprefix("width:").removesuffix("%")) for attrs in segments]
+        assert widths == pytest.approx([expected, 100 - expected])
+        assert [attrs["class"] for attrs in segments] == ["segment side-a", "segment side-b"]
+    if None in values:
+        assert "暂无" in tracks[0]["aria-label"]
+    elif values == (0, 0):
+        assert "A 队 0，B 队 0" in tracks[0]["aria-label"]
+
+
+def test_composition_compares_each_original_share_with_one_shared_bar(view):
+    view.update(kind="match", teams=[
+        {"name": "A 队", "composition": [{"name": "装甲", "percentage": 40}, {"name": "步兵", "percentage": 60}]},
+        {"name": "B 队", "composition": [{"name": "装甲", "percentage": 20}, {"name": "步兵", "percentage": 30}]},
+    ])
+    html = Renderer().template(view)
+    tags = VisibleHTML(html).tags
+    tracks = [attrs for _, attrs in tags if attrs.get("role") == "img"]
+    segments = [attrs for _, attrs in tags if "role-a" in attrs.get("class", "") or "role-b" in attrs.get("class", "")]
+    assert len(tracks) == 2 and len(segments) == 4
+    assert [attrs["class"] for attrs in segments] == ["segment role-armor role-a", "segment role-armor role-b",
+                                                      "segment role-infantry role-a", "segment role-infantry role-b"]
+    widths = [float(attrs["style"].removeprefix("width:").removesuffix("%")) for attrs in segments]
+    assert widths == pytest.approx([100 * 40 / 60, 100 * 20 / 60, 100 * 60 / 90, 100 * 30 / 90])
+    assert "A 队 40.00%，B 队 20.00%" in tracks[0]["aria-label"]
+    assert "A 队 60.00%，B 队 30.00%" in tracks[1]["aria-label"]
+    assert "左 A 队（深）· 右 B 队（浅）" in VisibleHTML(html).text
+    assert "composition-stack" not in html
+
+
+@pytest.mark.parametrize("a,b,expected", [(0, 0, None), (None, 20, None), (20, None, None), (0, 20, 0)])
+def test_composition_distinguishes_zero_and_missing_share(view, a, b, expected):
+    view.update(kind="match", teams=[
+        {"name": name, "composition": [{"name": "装甲", "percentage": value}]}
+        for name, value in zip(("A 队", "B 队"), (a, b))
+    ])
+    tags = VisibleHTML(Renderer().template(view)).tags
+    segments = [attrs for _, attrs in tags if "segment" in attrs.get("class", "").split()]
+    track = next(attrs for _, attrs in tags if attrs.get("role") == "img")
+    if expected is None:
+        assert not segments and "no-comparison" in track["class"]
+    else:
+        assert float(segments[0]["style"].removeprefix("width:").removesuffix("%")) == expected
+    assert ("暂无" in track["aria-label"]) is (a is None or b is None)
+    if a == b == 0:
+        assert "A 队 0.00%，B 队 0.00%" in track["aria-label"]
+
+
+def test_only_complete_composition_can_supply_an_omitted_zero_category(view):
+    view.update(kind="match", teams=[
+        {"name": "A 队", "composition": [{"name": "步兵", "percentage": 100}]},
+        {"name": "B 队", "composition": [{"name": "装甲", "percentage": 30}]},
+    ])
+    tracks = [attrs for _, attrs in VisibleHTML(Renderer().template(view)).tags if attrs.get("role") == "img"]
+    assert "A 队 0.00%，B 队 30.00%" in tracks[0]["aria-label"]
+    assert "A 队 100.00%，B 队 暂无" in tracks[1]["aria-label"]
+
+
+def test_unknown_composition_is_not_rendered_as_zero_or_renormalized(view):
+    view.update(kind="match", teams=[{"name": "A 队", "composition": [], "composition_note": "1 人缺单位数据，构成暂无"}])
+    html = Renderer().template(view)
+    assert not any(attrs.get("role") == "img" for _, attrs in VisibleHTML(html).tags)
+    assert "暂无完整兵种构成" in VisibleHTML(html).text
+    assert "1 人缺单位数据" in VisibleHTML(html).text
+
+
+def test_team_summary_distinguishes_post_match_elo_and_preserves_unknown_result(view):
+    view.update(kind="match", prediction={"a": 60, "b": 40}, teams=[
+        {"name": "A 队", "outcome": "win", "metrics": [{"label": "赛后平均 ELO", "value": 1500}, {"label": "摧毁分", "value": 5000}],
+         "players": [{"elo": 1400, "elo_delta": 10}, {"elo": 1600, "elo_delta": None}]},
+        {"name": "B 队", "outcome": "unknown", "players": [{"elo": 1500, "elo_delta": 20}]},
+    ])
+    html = Renderer().template(view)
+    summary = html.split('<div class="team-summaries">', 1)[1].split('<div class="match-columns">', 1)[0]
+    text = compact(VisibleHTML('<body>' + summary + '</body>').text)
+    assert "赛前平均ELO暂无" in text and "赛后平均ELO1500" in text
+    assert "平均ELO变化暂无" in text and "平均ELO变化+20.00" in text
+    assert "胜负暂无" in text and text.count("胜利") == 1
+    assert html.index('class="prediction"') < html.index('class="team-summaries"') < html.index('class="match-columns"')

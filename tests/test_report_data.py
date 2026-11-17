@@ -192,7 +192,7 @@ def test_match_team_metrics_sum_known_values_show_coverage_and_leave_missing_out
     view = report.s.match_view(report.result(match))
     first = {item["label"]: item for item in view["teams"][0]["metrics"]}
     assert {key: item["value"] for key, item in first.items()} == {
-        "摧毁分": 350, "损失分": 100, "平均 ELO": 1100, "击杀": 5, "阵亡": 1, "伤害": 500,
+        "摧毁分": 350, "损失分": 100, "赛后平均 ELO": 1100, "击杀": 5, "阵亡": 1, "伤害": 500,
         "出兵花费": 1000, "占点": 0, "补给": 10,
     }
     assert first["伤害"]["note"] == "1/2 人有数据"
@@ -276,6 +276,32 @@ def test_match_prediction_composition_and_a_b_order_reach_both_renderers(report)
         assert "装甲" in output and "步兵" in output
         assert output.index("A 队") < output.index("B 队")
     assert match == before
+
+
+@pytest.mark.parametrize("a_before", [1600, None])
+def test_match_rating_times_reach_summary_from_real_payload(report, a_before):
+    from render import Renderer
+
+    match = report.m.parse_match({"matchInfo": {
+        "StartTime": 1700000000, "EndTime": 1700001200, "TotalPlayTimeInSec": 1200,
+        "Data": {
+            "a": {"Id": "001", "Name": "A player", "TeamId": 0, "OldRating": a_before, "NewRating": 1620},
+            "b": {"Id": "002", "Name": "B player", "TeamId": 1, "OldRating": 1600, "NewRating": 1580},
+        }}}, "rating-times")
+    view = report.s.match_view(report.result(match))
+    assert view["teams"][0]["players"][0]["elo_before"] == a_before
+    assert view["teams"][1]["players"][0]["elo_before"] == 1600
+    assert [team["outcome"] for team in view["teams"]] == ["unknown", "unknown"]
+    assert view["prediction"] == ({"a": 50, "b": 50} if a_before is not None else None)
+    renderer = Renderer()
+    html, text = renderer.template(view), renderer.text(view)
+    summary = html.split('<div class="team-summaries">', 1)[1].split('<div class="match-columns">', 1)[0]
+    assert summary.count('<dt>赛前平均 ELO</dt><dd>1600</dd>') == (2 if a_before is not None else 1)
+    assert ('<dt>赛前平均 ELO</dt><dd>暂无</dd>' in summary) is (a_before is None)
+    for rating in (1620, 1580):
+        assert f'<dt>赛后平均 ELO</dt><dd>{rating}</dd>' in summary
+    assert "赛后平均 ELO：1620 / 1580" in text
+    assert "当前平均 ELO" not in html + text
 
 
 def test_match_unknown_units_and_missing_ratings_stay_unknown_in_service(report):

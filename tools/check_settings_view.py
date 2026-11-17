@@ -86,6 +86,9 @@ async def main():
     image_mode = next(field for field in snapshot["fields"] if field["path"] == "output.image_send_mode")
     assert image_mode["default"] == image_mode["value"] == "base64"
     assert image_mode["options"] == ["base64", "file", "url"]
+    image_theme = next(field for field in snapshot["fields"] if field["path"] == "output.theme")
+    assert image_theme["default"] == image_theme["value"] == "light"
+    assert image_theme["options"] == ["light", "dark"]
     checks = []
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
@@ -118,6 +121,10 @@ async def main():
                 assert await image_select.input_value() == "base64"
                 assert await image_select.locator("option").evaluate_all("options => options.map(option => option.value)") == ["base64", "file", "url"]
                 assert await image_select.locator("option:checked").inner_text() == "Base64（默认）"
+                theme_select = page.locator("#setting-output-theme")
+                assert await theme_select.input_value() == "light"
+                assert await theme_select.locator("option").evaluate_all("options => options.map(option => option.value)") == ["light", "dark"]
+                assert await theme_select.locator("option:checked").inner_text() == "浅色"
                 await page.evaluate("""() => {
                   const p = document.createElement('p'); p.textContent = '合成预览 · 非运行实例';
                   p.className = 'muted'; document.querySelector('h1').after(p);
@@ -156,6 +163,16 @@ async def main():
                     assert "手动重载" in await page.locator("#apply-state").inner_text()
                     assert await page.locator("#save").is_disabled()
 
+                await theme_select.select_option("dark")
+                await page.locator("#save").click()
+                await page.wait_for_function("document.getElementById('save-status').textContent.includes('手动重载')")
+                post = await page.evaluate("window.__posts.at(-1)")
+                assert post["payload"]["changes"] == {"output.theme": "dark"}
+                assert await theme_select.input_value() == "dark"
+                assert await theme_select.locator("..").get_attribute("data-pending") == "true"
+                assert await page.locator("html").get_attribute("data-theme") == theme
+                assert (await page.evaluate("window.__state.pending_restart")) == ["output.image_send_mode", "output.theme"]
+
                 await page.locator('[data-section="limits"]').click()
                 await page.locator("#setting-limits-user_daily_limit").fill("21")
                 await page.evaluate("window.__conflict = true")
@@ -177,6 +194,7 @@ async def main():
                 checks.append({"theme": theme, "viewport": label, **dimensions, "passed": True,
                                "checks": ["host theme", "default collapsed", "diagnostic save", "download route",
                                           "image mode defaults to Base64", "file save pending restart", "url save pending restart",
+                                          "image theme defaults to light", "dark image theme save pending restart",
                                           "conflict preserves draft", "reload preserves draft", "restart indication", "fixed global quota"],
                                "page_errors": errors, "external_requests": external})
                 await context.close()
