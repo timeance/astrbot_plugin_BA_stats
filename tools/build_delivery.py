@@ -117,7 +117,7 @@ def text_catalog(files):
                     walk(child, target)
     walk(schema)
     for number, line in enumerate((ROOT / "metadata.yaml").read_text(encoding="utf-8").splitlines(), 1):
-        if line.startswith(("display_name:", "desc:")):
+        if line.startswith(("display_name:", "short_desc:", "desc:")):
             key, text = line.split(":", 1)
             result.append(dict(id="metadata:" + key, file="metadata.yaml", line=number,
                                context=key, kind="插件展示信息（名称需用户确认）", original=yaml.safe_load(text), suggestion=""))
