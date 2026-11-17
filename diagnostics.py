@@ -32,7 +32,7 @@ _EVENTS = frozenset({
     "lifecycle", "command", "query", "request", "cache", "render", "send", "fallback", "quota", "export",
     "plugin_start", "plugin_stop", "command_start", "command_complete", "command_error",
     "query_complete", "image_cache", "image_render_start", "image_render_complete", "image_render_error",
-    "image_send_start", "image_send_complete", "image_send_error", "text_report",
+    "image_send_start", "image_send_complete", "image_send_error", "image_validated", "image_cache_invalid", "text_report",
     "text_send_start", "text_send_complete", "text_send_error", "http_start", "http_response", "http_error",
 })
 _ACTIONS = frozenset({"help", "stats", "recent", "last", "match", "search", "bind", "binding", "unbind", "select", "cancel", "status", "quota", "cache_clear", "unknown"})
@@ -43,7 +43,8 @@ _ERROR_TYPES = frozenset({
     "ReadTimeout", "WriteTimeout", "PoolTimeout", "HTTPError", "HTTPStatusError", "RequestError",
     "ClientError", "NotConfiguredError", "AuthenticationError", "RateLimitError", "RequestTimeoutError",
     "UpstreamError", "NoDataError", "SchemaError", "IdentityMismatchError", "QueueFullError", "ClientClosedError",
-    "QuotaExceededError",
+    "QuotaExceededError", "ImageTransportError", "UnidentifiedImageError", "DecompressionBombError",
+    "DecompressionBombWarning", "ClientConnectorError", "ClientPayloadError", "ClientResponseError", "ServerTimeoutError",
 })
 _ROUTES = frozenset({"/api/players/search", "/api/analysis/player", "/api/players/matches", "/api/match"})
 _IMAGE_NAME = re.compile(r"(?:[0-9a-f]{64}|report|card|image)(?:-[0-9]{1,4})?\.(?:jpg|jpeg|png|webp|gif)\Z", re.IGNORECASE)
@@ -59,6 +60,14 @@ _MESSAGE_MARKERS = (
     ("failed", re.compile(r"\bfail\w*\b|失败", re.IGNORECASE)),
 )
 _ENUMS = {
+    "mode": frozenset({"base64", "file", "url"}),
+    "stage": frozenset({"generate", "download", "validate", "cache", "send"}),
+    "reason": frozenset({"generation_failed", "download_failed", "validation_failed", "cache_failed", "send_failed",
+                         "timeout", "http_status", "invalid_content_type", "invalid_image_size", "invalid_image",
+                         "unsupported_image", "url_unavailable", "local_path_unavailable", "unsupported_mode",
+                         "onebot_required", "invalid_target", "onebot_rejected"}),
+    "content_type": frozenset({"image/jpeg", "image/png", "image/gif", "image/webp", "application/octet-stream",
+                               "text/plain", "text/html", "application/json"}),
     "phase": frozenset({"start", "finish", "error", "cancel", "initialize", "terminate", "enable", "disable"}),
     "command": _ACTIONS,
     "action": _ACTIONS,
@@ -70,7 +79,7 @@ _ENUMS = {
     "image_type": frozenset({"JPEG", "JPG", "PNG", "GIF", "WEBP", "UNKNOWN", "jpeg", "jpg", "png", "gif", "webp", "unknown", "未知"}),
     "scope": frozenset({"global", "user", "group"}),
 }
-_COUNTERS = frozenset({"count", "inflight", "requests", "cache_hits", "stale_hits", "bytes", "retry", "limit", "used", "remaining", "page", "image_bytes", "attempt", "rows"})
+_COUNTERS = frozenset({"count", "inflight", "requests", "cache_hits", "stale_hits", "bytes", "retry", "limit", "used", "remaining", "page", "image_bytes", "attempt", "rows", "width", "height"})
 _BOOLEANS = frozenset({"configured", "closed", "force", "cached", "stale"})
 
 
@@ -94,7 +103,7 @@ def _safe_fields(fields: dict) -> dict:
     value = fields.get("status")
     if type(value) is int and 100 <= value <= 599:
         result["status"] = value
-    elif type(value) is str and value in _ERROR_CODES | {"ok", "success", "error", "failed", "fallback", "0.1.2"}:
+    elif type(value) is str and value in _ERROR_CODES | {"ok", "success", "error", "failed", "fallback", "0.1.2", "0.1.3"}:
         result["status"] = value
     value = fields.get("retcode")
     if type(value) is int and -1_000_000_000 <= value <= 1_000_000_000:
@@ -119,6 +128,23 @@ def _safe_fields(fields: dict) -> dict:
     if type(value) in (int, float) and 0 <= value <= 1_000_000_000 and math.isfinite(value):
         result["duration_ms"] = value
     return result
+
+
+def image_error_metadata(exc, mode, stage):
+    """Share the same allowlist between always-on console errors and diagnostics."""
+    result = getattr(exc, "result", None)
+    result = result if isinstance(result, dict) else {}
+    cause = exc.__cause__ or exc
+    defaults = {"generate": "generation_failed", "download": "download_failed", "validate": "validation_failed",
+                "cache": "cache_failed", "send": "send_failed"}
+    return _safe_fields({
+        "mode": mode, "stage": stage if stage == "cache" else getattr(exc, "stage", stage),
+        "error": type(cause).__name__, "retcode": result.get("retcode"),
+        "reason": getattr(exc, "reason", "timeout" if isinstance(exc, TimeoutError) else defaults.get(stage)),
+        "message": result.get("message") or result.get("wording"),
+        "status_code": getattr(exc, "status_code", None), "content_type": getattr(exc, "content_type", None),
+        "image_bytes": getattr(exc, "image_bytes", None),
+    })
 
 
 class DiagnosticLog:

@@ -20,7 +20,8 @@ _ATTRS = {
     "access.enabled": "enabled", "access.base_url": "base_url",
     "query.default_limit": "default_limit", "query.max_limit": "max_limit",
     "query.cooldown_seconds": "cooldown_seconds", "query.chinese_aliases": "chinese_aliases",
-    "output.image_enabled": "image_enabled", "output.theme": "theme", "output.timezone": "timezone",
+    "output.image_enabled": "image_enabled", "output.image_send_mode": "image_send_mode",
+    "output.theme": "theme", "output.timezone": "timezone",
     "limits.user_daily_limit": "user_daily_limit", "limits.group_daily_limit": "group_daily_limit",
     **{f"maintenance.{key}": key for key in (
         "request_interval", "concurrency", "queue_size", "request_timeout", "wait_timeout",

@@ -22,6 +22,7 @@ from zipfile import ZipFile
 
 import pytest
 import httpx
+from PIL import Image as PILImage
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,6 +79,9 @@ class Event:
 
     def get_platform_id(self):
         return self.platform
+
+    def get_platform_name(self):
+        return "aiocqhttp"
 
     def get_group_id(self):
         return self.group
@@ -235,6 +239,221 @@ async def app(app_modules):
 
 async def collect(plugin, event):
     return [item async for item in plugin.ba(event)]
+
+
+def image_bytes(image_type="JPEG"):
+    output = BytesIO()
+    PILImage.new("RGB", (12, 8), "#285080").save(output, format=image_type)
+    return output.getvalue()
+
+
+def artifact(app, path, *, url=None):
+    return app.main.ImageArtifact(Path(path), "JPEG", 12, 8, len(image_bytes()), url)
+
+
+@pytest.mark.parametrize("mode", ["base64", "file", "url"])
+async def test_twenty_byte_render_body_never_enters_cache_or_send(app, monkeypatch, mode, caplog):
+    plugin = await app.make(config={"output": {"image_enabled": True, "image_send_mode": mode}})
+    monkeypatch.setattr(plugin.renderer, "template", lambda view: "synthetic html")
+    monkeypatch.setattr(plugin.service, "execute", AsyncMock(return_value=SimpleNamespace(text="", view={"kind": "overview"}, instructions=())))
+    render = AsyncMock(return_value="https://render.invalid/result?signature=NEVER-LOG")
+    download = AsyncMock(return_value=(b"Internal Server Err ", "image/jpeg"))
+    assert len(download.return_value[0]) == 20
+    monkeypatch.setattr(plugin, "html_render", render)
+    monkeypatch.setattr(app.main, "download_image", download)
+    event = Event([Plain("/ba stats stb:001")])
+    event.bot = SimpleNamespace(call_action=AsyncMock())
+    replies = await collect(plugin, event)
+    assert len(replies) == 1 and replies[0].use_t2i_ is False
+    assert not event.sent
+    event.bot.call_action.assert_not_awaited()
+    render.assert_awaited_once()
+    download.assert_awaited_once()
+    assert list(plugin._images.iterdir()) == []
+    assert f"mode={mode}" in caplog.text and "stage=validate" in caplog.text
+    assert "bytes=20" in caplog.text and "invalid_image" in caplog.text
+    assert "NEVER-LOG" not in caplog.text and "render.invalid" not in caplog.text
+    assert caplog.records[-1].levelno == logging.ERROR
+    assert not plugin.diagnostics.enabled
+
+
+async def test_bad_cache_deleted_and_regenerated_once_without_touching_other_data(app, monkeypatch, tmp_path):
+    plugin = await app.make(images=True)
+    monkeypatch.setattr(plugin.renderer, "template", lambda view: "cache regression")
+    digest = app.main.hashlib.sha256(b"sessioncache regression").hexdigest()
+    bad = plugin._images / f"{digest}.jpg"
+    bad.write_bytes(b"Internal Server Err ")
+    source = tmp_path / "real.png"
+    source.write_bytes(image_bytes("PNG"))
+    render = AsyncMock(return_value=str(source))
+    monkeypatch.setattr(plugin, "html_render", render)
+    marker = plugin.data_dir / "keep.json"
+    marker.write_text("keep")
+    await plugin.storage.put_cache("keep-api", {"ok": True}, 60)
+    first = await plugin._image({}, "session")
+    assert not bad.exists() and first.path.suffix == ".png"
+    assert first.path.read_bytes() == source.read_bytes()
+    assert (first.width, first.height, first.image_type) == (12, 8, "PNG")
+    assert await plugin._image({}, "session") == first
+    render.assert_awaited_once()
+    assert marker.read_text() == "keep" and await plugin.storage.cache_count() == 1
+
+
+async def test_valid_old_mislabeled_cache_uses_true_extension_without_rerender(app, monkeypatch):
+    plugin = await app.make(images=True)
+    monkeypatch.setattr(plugin.renderer, "template", lambda view: "old image")
+    digest = app.main.hashlib.sha256(b"sessionold image").hexdigest()
+    old = plugin._images / f"{digest}.jpg"
+    old.write_bytes(image_bytes("PNG"))
+    image = await plugin._image({}, "session")
+    assert image.path.suffix == ".png" and not old.exists()
+    assert image.path.read_bytes() == image_bytes("PNG")
+
+
+async def test_bad_cache_and_bad_regeneration_leave_no_reusable_artifact(app, monkeypatch, tmp_path):
+    plugin = await app.make(images=True)
+    monkeypatch.setattr(plugin.renderer, "template", lambda view: "bad cache")
+    digest = app.main.hashlib.sha256(b"sessionbad cache").hexdigest()
+    (plugin._images / f"{digest}.jpg").write_bytes(b"Internal Server Err ")
+    source = tmp_path / "bad.jpg"
+    source.write_bytes(b"Internal Server Err ")
+    render = AsyncMock(return_value=str(source))
+    monkeypatch.setattr(plugin, "html_render", render)
+    with pytest.raises(app.main.ImageTransportError, match="invalid_image"):
+        await plugin._image({}, "session")
+    assert not plugin._image_files()
+    render.assert_awaited_once()
+
+
+async def test_url_mode_regenerates_url_each_time_but_shares_validated_disk_cache(app, monkeypatch):
+    plugin = await app.make(config={"output": {"image_enabled": True, "image_send_mode": "url"}})
+    monkeypatch.setattr(plugin.renderer, "template", lambda view: "url cache")
+    urls = ["https://render.invalid/a?signature=one", "https://render.invalid/b?signature=two"]
+    render = AsyncMock(side_effect=urls)
+    download = AsyncMock(return_value=(image_bytes("PNG"), "image/png"))
+    monkeypatch.setattr(plugin, "html_render", render)
+    monkeypatch.setattr(app.main, "download_image", download)
+    first = await plugin._image({}, "session")
+    second = await plugin._image({}, "session")
+    assert [first.url, second.url] == urls and first.path == second.path
+    assert render.await_count == download.await_count == 2
+    assert all(call.kwargs["return_url"] is True for call in render.await_args_list)
+    assert len(plugin._image_files()) == 1
+    assert "signature" not in repr(second)
+    plugin.settings = app.main.replace(plugin.settings, image_send_mode="base64")
+    cached = await plugin._image({}, "session")
+    assert cached.path == second.path and cached.url is None
+    assert render.await_count == 2
+
+
+async def test_url_mode_with_local_path_reports_error_and_never_sends(app, monkeypatch, tmp_path, caplog):
+    plugin = await app.make(config={"output": {"image_enabled": True, "image_send_mode": "url"}})
+    source = tmp_path / "local.jpg"
+    source.write_bytes(image_bytes())
+    render = AsyncMock(return_value=str(source))
+    monkeypatch.setattr(plugin, "html_render", render)
+    monkeypatch.setattr(plugin.service, "execute", AsyncMock(return_value=SimpleNamespace(text="", view={"kind": "overview"}, instructions=())))
+    event = Event([Plain("/ba stats stb:001")])
+    event.bot = SimpleNamespace(call_action=AsyncMock())
+    replies = await collect(plugin, event)
+    assert len(replies) == 1 and not event.sent
+    event.bot.call_action.assert_not_awaited()
+    render.assert_awaited_once()
+    assert "mode=url" in caplog.text and "url_unavailable" in caplog.text
+    assert caplog.records[-1].levelno == logging.ERROR
+
+
+@pytest.mark.parametrize("mode", ["file", "url"])
+@pytest.mark.parametrize("group", ["123", ""])
+async def test_native_onebot_payload_and_no_standard_component_conversion(app, monkeypatch, tmp_path, mode, group):
+    plugin = await app.make(config={"output": {"image_enabled": True, "image_send_mode": mode}})
+    picture = tmp_path / "空 格 #.jpg"
+    picture.write_bytes(image_bytes())
+    url = "https://render.invalid/result?signature=do%2Fnot%2Bchange"
+    image = artifact(app, picture, url=url)
+    event = Event([], group=group, user="456")
+    event.bot = SimpleNamespace(call_action=AsyncMock(return_value={"message_id": 1}))
+    event.image_result = lambda path: pytest.fail("native modes must not use a standard Image component")
+    event.send = AsyncMock(side_effect=AssertionError("native modes must not call event.send"))
+    await plugin._send_image(event, image)
+    event.bot.call_action.assert_awaited_once_with(
+        "send_group_msg" if group else "send_private_msg",
+        **{"group_id" if group else "user_id": int(group or "456"), "self_id": "999",
+           "message": [{"type": "image", "data": {"file": picture.resolve().as_uri() if mode == "file" else url}}]})
+    event.send.assert_not_awaited()
+
+
+@pytest.mark.parametrize("mode", ["base64", "file", "url"])
+async def test_failed_send_uses_error_and_text_without_retrying_or_switching_mode(app, monkeypatch, tmp_path, caplog, mode):
+    plugin = await app.make(config={"output": {"image_enabled": True, "image_send_mode": mode}})
+    picture = tmp_path / "report.jpg"
+    picture.write_bytes(image_bytes())
+    render = AsyncMock(return_value=artifact(app, picture, url="https://render.invalid/image?secret=123"))
+    monkeypatch.setattr(plugin, "_image", render)
+    monkeypatch.setattr(plugin.service, "execute", AsyncMock(return_value=SimpleNamespace(text="", view={"kind": "overview"}, instructions=())))
+    error = RuntimeError("base64://raw-body https://secret.invalid/?token=leak private-chat")
+    error.result = {"retcode": 1200, "message": "Timeout: sendMsg base64://raw-body secret-token private-chat"}
+    event = Event([Plain("/ba stats stb:001")])
+    event.send = AsyncMock(side_effect=error)
+    event.bot = SimpleNamespace(call_action=AsyncMock(side_effect=error))
+    replies = await collect(plugin, event)
+    assert len(replies) == 1 and replies[0].use_t2i_ is False
+    assert event.send.await_count == (mode == "base64")
+    assert event.bot.call_action.await_count == (mode != "base64")
+    render.assert_awaited_once()
+    assert f"mode={mode}" in caplog.text and "stage=send" in caplog.text and "retcode=1200" in caplog.text
+    assert caplog.records[-1].levelno == logging.ERROR
+    assert not any(secret in caplog.text for secret in ("raw-body", "secret.invalid", "secret-token", "private-chat", "?secret="))
+
+
+@pytest.mark.parametrize("mode", ["file", "url"])
+async def test_native_modes_reject_non_onebot_platform_with_text_fallback(app, monkeypatch, caplog, mode):
+    plugin = await app.make(config={"output": {"image_enabled": True, "image_send_mode": mode}})
+    monkeypatch.setattr(plugin, "_image", AsyncMock(return_value=artifact(app, "report.jpg", url="https://render.invalid/image")))
+    monkeypatch.setattr(plugin.service, "execute", AsyncMock(return_value=SimpleNamespace(text="", view={"kind": "overview"}, instructions=())))
+    event = Event([Plain("/ba stats stb:001")])
+    event.get_platform_name = lambda: "discord"
+    event.bot = SimpleNamespace(call_action=AsyncMock())
+    replies = await collect(plugin, event)
+    assert len(replies) == 1 and not event.sent
+    event.bot.call_action.assert_not_awaited()
+    assert "onebot_required" in caplog.text and caplog.records[-1].levelno == logging.ERROR
+
+
+@pytest.mark.parametrize("mode", ["base64", "file", "url"])
+@pytest.mark.parametrize("stage", ["generate", "download"])
+async def test_generation_and_download_failures_log_correct_stage_without_secrets(app, monkeypatch, caplog, mode, stage):
+    plugin = await app.make(config={"output": {"image_enabled": True, "image_send_mode": mode}})
+    monkeypatch.setattr(plugin.service, "execute", AsyncMock(return_value=SimpleNamespace(text="", view={"kind": "overview"}, instructions=())))
+    error = RuntimeError("https://render.invalid/?signature=private-token base64://private-data private-chat")
+    render = AsyncMock(side_effect=error) if stage == "generate" else AsyncMock(return_value="https://render.invalid/?signature=private-token")
+    monkeypatch.setattr(plugin, "html_render", render)
+    download = AsyncMock(side_effect=error)
+    monkeypatch.setattr(app.main, "download_image", download)
+    event = Event([Plain("/ba stats stb:001")])
+    replies = await collect(plugin, event)
+    assert len(replies) == 1 and not event.sent
+    assert f"mode={mode}" in caplog.text and f"stage={stage}" in caplog.text
+    assert "error=RuntimeError" in caplog.text and "retcode=unknown" in caplog.text
+    assert caplog.records[-1].levelno == logging.ERROR
+    assert not any(secret in caplog.text for secret in ("render.invalid", "private-token", "private-data", "private-chat"))
+    assert download.await_count == (stage == "download")
+    assert not plugin.diagnostics.enabled
+
+
+@pytest.mark.parametrize("mode", ["file", "url"])
+async def test_native_returned_failure_envelope_is_not_reported_as_success(app, monkeypatch, caplog, mode):
+    plugin = await app.make(config={"output": {"image_enabled": True, "image_send_mode": mode}})
+    monkeypatch.setattr(plugin, "_image", AsyncMock(return_value=artifact(app, "report.jpg", url="https://render.invalid/image")))
+    monkeypatch.setattr(plugin.service, "execute", AsyncMock(return_value=SimpleNamespace(text="", view={"kind": "overview"}, instructions=())))
+    event = Event([Plain("/ba stats stb:001")])
+    event.bot = SimpleNamespace(call_action=AsyncMock(return_value={"status": "failed", "retcode": 1200,
+                                                                  "message": "private-data Timeout: sendMsg"}))
+    replies = await collect(plugin, event)
+    assert len(replies) == 1 and not event.sent
+    event.bot.call_action.assert_awaited_once()
+    assert "retcode=1200" in caplog.text and "onebot_rejected" in caplog.text
+    assert "private-data" not in caplog.text
 
 
 def test_only_framework_ba_command_is_registered(app_modules):
@@ -474,7 +693,7 @@ async def test_report_delivery_failure_switches_remaining_pages_to_plain_text(ap
     monkeypatch.setattr(plugin.service, "execute", execute)
     monkeypatch.setattr(plugin.renderer, "views", lambda view: [{"kind": "recent", "page": i} for i in range(3)])
     monkeypatch.setattr(plugin.renderer, "text", lambda view: f"same data page {view['page']}")
-    render = AsyncMock(side_effect=lambda view, umo: f"page-{view['page']}.jpg")
+    render = AsyncMock(side_effect=lambda view, umo: artifact(app, f"page-{view['page']}.jpg"))
     monkeypatch.setattr(plugin, "_image", render)
     event = Event([Plain("/ba stats stb:152117")])
     attempted = []
@@ -500,7 +719,7 @@ async def test_cancelled_image_send_is_not_converted_to_fallback(app, monkeypatc
     plugin = await app.make(images=True)
     monkeypatch.setattr(plugin.service, "execute", AsyncMock(return_value=SimpleNamespace(text="", view={}, instructions=())))
     monkeypatch.setattr(plugin.renderer, "views", lambda view: [view])
-    monkeypatch.setattr(plugin, "_image", AsyncMock(return_value="synthetic.jpg"))
+    monkeypatch.setattr(plugin, "_image", AsyncMock(return_value=artifact(app, "synthetic.jpg")))
     event = Event([Plain("/ba stats stb:001")])
     event.send = AsyncMock(side_effect=asyncio.CancelledError)
     with pytest.raises(asyncio.CancelledError):
@@ -510,9 +729,8 @@ async def test_cancelled_image_send_is_not_converted_to_fallback(app, monkeypatc
 
 async def test_image_render_uses_mobile_jpeg_contract_and_fixed_outer_template(app, monkeypatch, tmp_path):
     plugin = await app.make(images=True)
-    # Only exercise local file handoff/caching, not image validity or appearance.
     source = tmp_path / "synthetic-render.jpg"
-    source.write_bytes(b"synthetic jpeg handoff")
+    source.write_bytes(image_bytes())
     render = AsyncMock(return_value=str(source))
     monkeypatch.setattr(plugin, "html_render", render)
     view = {
@@ -520,14 +738,14 @@ async def test_image_render_uses_mobile_jpeg_contract_and_fixed_outer_template(a
         "scope": "合成测试样本", "fetched_at": datetime(2026, 11, 17, tzinfo=timezone.utc),
     }
     first = await plugin._image(view, "onebot:test:group:one")
-    assert Path(first).suffix == ".jpg"
-    assert Path(first).read_bytes() == source.read_bytes()
+    assert first.path.suffix == ".jpg"
+    assert first.path.read_bytes() == source.read_bytes()
     assert await plugin._image(view, "onebot:test:group:one") == first
     render.assert_awaited_once()
     positional, options = render.await_args
     assert positional[0] == "{{ body | safe }}"
     assert "{{ 7 * 7 }} a  b" in positional[1]["body"]
-    assert options["return_url"] is False
+    assert options["return_url"] is True
     assert options["umo"] == "onebot:test:group:one"
     assert options["options"] == {
         "type": "jpeg", "quality": 85, "full_page": True,
@@ -692,12 +910,13 @@ def test_quota_defaults_schema_and_fixed_total_are_consistent(app_modules):
 async def test_image_failure_logs_onebot_details_and_image_metadata(app, tmp_path, caplog):
     plugin = await app.make(config={"diagnostics": {"enabled": True}})
     picture = tmp_path / "report.jpg"
-    picture.write_bytes(b"\xff\xd8\xff" + b"synthetic-image")
+    picture.write_bytes(image_bytes())
     error = RuntimeError("not used")
     error.result = {"retcode": 1200, "message": "Timeout: sendMsg base64://private-image https://secret.invalid/?token=secret",
                     "data": "private-response", "echo": {"token": "private-echo"}}
-    with caplog.at_level(logging.WARNING):
-        plugin._log_image_send_failure(error, str(picture))
+    with caplog.at_level(logging.ERROR):
+        plugin._log_image_failure(error, "base64", "send", artifact(app, picture))
+    assert all(record.levelno == logging.ERROR for record in caplog.records)
     assert "retcode=1200" in caplog.text and "Timeout: sendMsg" in caplog.text
     assert "JPEG" in caplog.text and str(picture.stat().st_size) in caplog.text
     assert not any(secret in caplog.text for secret in ("private-image", "secret.invalid", "private-response", "private-echo"))
