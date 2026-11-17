@@ -82,7 +82,7 @@ async def h(modules, tmp_path):
 
 
 def select_command(response):
-    match = re.search(r"/ba select ([^\s]+) ([0-9]+)", response.text)
+    match = re.search(r"ba select ([^\s]+) ([0-9]+)", "\n".join(command for _, command in response.instructions))
     assert match, response.text
     return f"select {match[1]} {match[2]}"
 
@@ -107,7 +107,7 @@ async def test_help_binding_unbind_work_with_real_unconfigured_client(h):
         h.service.client = real_client
         try:
             await seed(h, namespace=real_client.namespace)
-            assert "/ba help" in (await h.run("help")).text
+            assert "ba help" in (await h.run("help")).text
             assert "old" in (await h.run("binding")).text
             assert "解除" in (await h.run("unbind")).text
             assert await binding(h) is None
@@ -123,7 +123,7 @@ async def test_single_bind_requires_one_choice_and_forces_identity_revalidation(
     renamed = h.m.Player("001", "Renamed", source_url=h.player.source_url)
     h.client.player.side_effect = [h.result(h.player), h.result(renamed)]
     offered = await h.run("bind stb:001")
-    assert "选择后绑定" in offered.text
+    assert "请确认绑定账号" in offered.text
     assert h.player.source_url in offered.text
     assert await binding(h) == old
     command = select_command(offered)
@@ -161,7 +161,7 @@ async def test_read_only_search_and_select_never_change_binding(h, monkeypatch):
     write = AsyncMock(wraps=h.storage.set_binding)
     monkeypatch.setattr(h.storage, "set_binding", write)
     offered = await h.run("search Synthetic Player")
-    assert "请选择要查询" in offered.text
+    assert "请选择账号" in offered.text
     assert await binding(h) == old
     response = await h.run(select_command(offered))
     assert response.view["kind"] == "overview"
@@ -170,6 +170,37 @@ async def test_read_only_search_and_select_never_change_binding(h, monkeypatch):
     write.assert_not_awaited()
     assert h.client.player.await_args_list == [call("001")]
     h.client.recent.assert_awaited_once_with("001", h.service.settings.max_limit)
+
+
+@pytest.mark.parametrize("count", [1, 3, 4, 20])
+async def test_bind_candidate_limit_and_explicit_id_recovery(h, count):
+    old = await seed(h)
+    previous = await h.run("bind stb:001")
+    players = [h.m.Player(str(i), f"Synthetic {i}") for i in range(count)]
+    h.client.search.return_value = h.result(players)
+    offered = await h.run("bind name:Synthetic")
+    assert await binding(h) == old
+    with pytest.raises(ValueError, match="过期"):
+        await h.run(select_command(previous))
+    if count <= 3:
+        choices = [cmd for _, cmd in offered.instructions if cmd.startswith("ba select ")]
+        assert len(choices) == count
+        assert offered.instructions[-1][1].startswith("ba cancel ")
+    else:
+        assert "https://dash.batrace.top/" in offered.text and "超过 3" in offered.text
+        assert offered.instructions == (("取得 ID 后发送：", "ba bind stb:玩家ID"),)
+        # The user can still bind a known player ID using the single confirmation.
+        explicit = await h.run("bind stb:001")
+        await h.run(select_command(explicit))
+        assert (await binding(h)).player_id == "001"
+
+
+async def test_bind_threshold_counts_distinct_ids(h):
+    h.client.search.return_value = h.result([h.player] * 4)
+    offered = await h.run("bind name:Synthetic Player")
+    assert "超过 3" not in offered.text
+    await h.run(select_command(offered))
+    assert (await binding(h)).player_id == "001"
 
 
 async def test_late_search_cannot_publish_over_newer_candidates(h):

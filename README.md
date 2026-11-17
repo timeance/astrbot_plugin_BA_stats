@@ -8,57 +8,57 @@ AstrBot 原生《断箭》（Broken Arrow）战绩查询插件。支持玩家概
 
 ## 快速开始
 
-1. **安装插件**：在 AstrBot 插件管理中导入 `astrbot_plugin_ba_stats_v0.1.0.zip`（或将插件目录放入 `data/plugins/` 并使用 AstrBot 的 Python 环境安装 `requirements.txt`）。
+1. **安装插件**：在 AstrBot 插件管理中导入 `astrbot_plugin_ba_stats_v0.1.1.zip`（或将插件目录放入 `data/plugins/` 并使用 AstrBot 的 Python 环境安装 `requirements.txt`）。
 2. **配置接入**：打开插件设置中的「数据源接入」，填入获准客户端标识（若运营方要求则填写 Bearer 令牌），开启「启用在线查询」。
 3. **保存重载**：保存配置并重载插件使其生效。
 4. **绑定与查询**：
-   - 发送 `/ba search 昵称` 搜索玩家
-   - 发送 `/ba bind stb:玩家ID` 并按提示发送 `/ba select 请求码 序号` 确认绑定
-   - 发送 `/ba me` 或 `/ba recent` 查看战报
+   - 发送 `ba search 昵称` 搜索玩家
+   - 发送 `ba bind stb:玩家ID` 并按提示发送 `ba select 请求码 序号` 确认绑定
+   - 发送 `ba me` 或 `ba recent` 查看战报
 
 接入说明见 [API 说明](docs/API_NOTES.md)。
 
 ## 命令列表
 
-默认前缀为 `/`（以实际 AstrBot 配置为准），英文子命令不区分大小写，开启中文别名后也可直接使用中文指令（如 `/ba 帮助`、`/ba 我`、`/ba 战绩`、`/ba 近期`、`/ba 上一场`、`/ba 单局`、`/ba 搜索`、`/ba 绑定`、`/ba 当前绑定`、`/ba 解绑`、`/ba 选择`、`/ba 取消`、`/ba 额度`）。
+下表为命令正文。群聊请先通过聊天软件的提及功能 @ 机器人，再输入 `ba …`；私聊通常直接发送，若宿主要求唤醒词则加在命令前。英文子命令不区分大小写，开启中文别名后也可直接使用中文指令（如 `ba 帮助`、`ba 我`、`ba 战绩`、`ba 近期`、`ba 上一场`、`ba 单局`、`ba 搜索`、`ba 绑定`、`ba 当前绑定`、`ba 解绑`、`ba 选择`、`ba 取消`、`ba 额度`）。
 
 | 命令 | 用途 |
 | --- | --- |
-| `/ba help` | 查看使用帮助与示例 |
-| `/ba me` | 查看自己默认绑定账号的玩家概览 |
-| `/ba stats <target>` | 查看指定玩家概览 |
-| `/ba recent [count]` | 查看自己近期战绩（默认 5 场，上限 20 场） |
-| `/ba me recent [count]` | 与 `/ba recent [count]` 等价 |
-| `/ba recent <target> --limit N` | 查看指定玩家近期最多 `N` 场战绩 |
-| `/ba last [target]` | 查看自己或指定玩家最近一场可用单局战报 |
-| `/ba me last` | 与 `/ba last` 等价 |
-| `/ba match <match-id>` | 查看指定对局 ID 的单局战报 |
-| `/ba search <query>` | 搜索玩家候选，选择后查看概览 |
-| `/ba bind <target>` | 设置默认查询账号（不验证账号归属） |
-| `/ba binding` | 查看当前绑定（纯本地，不耗额度） |
-| `/ba unbind` | 解除当前绑定（纯本地，不耗额度） |
-| `/ba select <request-code> <index>` | 确认候选编号（120 秒内有效，单次有效） |
-| `/ba cancel <request-code>` | 取消当前待确认选择 |
-| `/ba quota` | 查看个人、本群与全插件今日已用和剩余额度 |
-| `/ba status` | 管理员查看接入配置、请求与缓存状态 |
-| `/ba cache clear` | 管理员清理 API 与图片缓存（不影响绑定与额度） |
+| `ba help` | 查看使用帮助与示例 |
+| `ba me` | 查看自己默认绑定账号的玩家概览 |
+| `ba stats <target>` | 查看指定玩家概览 |
+| `ba recent [count]` | 查看自己近期战绩（默认 5 场，上限 20 场） |
+| `ba me recent [count]` | 与 `ba recent [count]` 等价 |
+| `ba recent <target> --limit N` | 查看指定玩家近期最多 `N` 场战绩 |
+| `ba last [target]` | 查看自己或指定玩家最近一场可用单局战报 |
+| `ba me last` | 与 `ba last` 等价 |
+| `ba match <match-id>` | 查看指定对局 ID 的单局战报 |
+| `ba search <query>` | 搜索玩家候选，选择后查看概览 |
+| `ba bind <target>` | 设置默认查询账号（不验证账号归属） |
+| `ba binding` | 查看当前绑定（纯本地，不耗额度） |
+| `ba unbind` | 解除当前绑定（纯本地，不耗额度） |
+| `ba select <request-code> <index>` | 确认候选编号（120 秒内有效，单次有效） |
+| `ba cancel <request-code>` | 取消当前待确认选择 |
+| `ba quota` | 查看个人、本群与全插件今日已用和剩余额度 |
+| `ba status` | 管理员查看接入配置、请求与缓存状态 |
+| `ba cache clear` | 管理员清理 API 与图片缓存（不影响绑定与额度） |
 
 ### 目标玩家（`target`）写法
 
 支持 `me`、`@群友`、`stb:规范ID`、`name:完整昵称` 或普通非数字昵称：
 
 ```text
-/ba stats "Player 2"
-/ba bind name:"Player 2"
-/ba recent name:"Player 2" --limit 10
-/ba recent 10
-/ba stats name:12345
-/ba stats name:me
-/ba stats @群友
+ba stats "Player 2"
+ba bind name:"Player 2"
+ba recent name:"Player 2" --limit 10
+ba recent 10
+ba stats name:12345
+ba stats name:me
+ba stats @群友
 ```
 
 - `@群友` 需使用聊天软件的真实提及功能，查询对方已绑定的账号。
-- 纯数字请加 `stb:`、`steam:` 或 `name:` 前缀（`/ba recent 10` 除外，该写法专指查询自己近期 10 场）。
+- 纯数字请加 `stb:`、`steam:` 或 `name:` 前缀（`ba recent 10` 除外，该写法专指查询自己近期 10 场）。
 - `steam:SteamID64` 当前因映射尚未确认暂不可直接查询，请改用昵称搜索后选择 STB ID。
 
 ## 主要配置
@@ -68,21 +68,21 @@ AstrBot 原生《断箭》（Broken Arrow）战绩查询插件。支持玩家概
 - **数据源接入**：在线查询开关、获准客户端标识、访问令牌（可选）、API 地址。
 - **查询与命令**：默认/最大近期场数（5 / 20）、用户冷却（3 秒）、中文子命令别名开关。
 - **每日请求额度**：每用户默认 20 次、每群默认 100 次（可在 `0–100` 间调整，`0` 表示不单独限制）；**全插件每日总上限固定为 100 次不可调整**。所有额度于北京时间每天 0 点重置，按上游 HTTP 请求计数，失败与重试也计入；命中缓存及本地命令不扣额。
-- **战报显示**：图片战报开关（渲染失败自动回退为同内容文字）、深浅主题（默认深色）、显示时区（默认 `Asia/Shanghai`）。
+- **战报显示**：图片战报开关（渲染或发送未成功时回复同内容文字）、深浅主题（默认深色）、显示时区（默认 `Asia/Shanghai`）。
 - **维护与缓存**：请求间隔、并发、超时、重试及缓存容量/旧缓存回退时间。
 
 ## 数据与常见问题
 
 - **为什么有字段显示「暂无」？**：当数据源未提供、未收录地图/单位名称，或胜负/模式语义尚未确认时，插件会显示「暂无」或来源 ID，不以猜测数据替代。
-- **为什么没查满 20 次就提示额度用完？**：额度按上游 HTTP 请求次数计算，单条战报命令可能触发多次接口请求（如未命中缓存的概览需请求搜索、分析与近期列表），个人额度跨群及私聊累计，可用 `/ba quota` 查看用量；重载或清缓存不会重置额度。
+- **为什么没查满 20 次就提示额度用完？**：额度按上游 HTTP 请求次数计算，单条战报命令可能触发多次接口请求（如未命中缓存的概览需请求搜索、分析与近期列表），个人额度跨群及私聊累计，可用 `ba quota` 查看用量；重载或清缓存不会重置额度。
 - **只收到文字没有图片？**：请检查「发送图片战报」是否开启及 AstrBot HTML 渲染服务是否正常。
-- **同名玩家怎么区分？**：请核对候选列表中的规范 STB ID 与来源链接后再发送 `/ba select` 确认。
+- **同名玩家怎么区分？**：绑定候选不超过 3 人时，核对 STB ID 与来源链接后按提示确认；超过 3 人请前往 [BATrace](https://dash.batrace.top/) 搜索，在玩家主页链接末尾取得 ID，再发送 `ba bind stb:玩家ID`。
 
 ## 开发与许可
 
 - 运行要求：AstrBot **4.29.4 及以上**，QQ（OneBot v11）；详细测试与验证记录见 [验证记录](docs/VALIDATION.md)。
 - 开源协议：**Apache-2.0**。
-- 致谢与参考：[BATrace](https://dash.batrace.top/)（战绩数据源）、[AlexanderHYu/ba-dragon](https://github.com/AlexanderHYu/ba-dragon)、[benx1n/wows-stats-bot](https://github.com/benx1n/wows-stats-bot)、[timeance/astrbot_plugin_openai_native](https://github.com/timeance/astrbot_plugin_openai_native)、AstrBot（第三方边界说明见 [第三方说明](docs/THIRD_PARTY.md)）。
+- 致谢与参考：[BATrace](https://dash.batrace.top/)（战绩数据源）、[AlexanderHYuba-dragon](https://github.com/AlexanderHYu/ba-dragon)、[benx1n/wows-stats-bot](https://github.com/benx1n/wows-stats-bot)、[timeance/astrbot_plugin_openai_native](https://github.com/timeance/astrbot_plugin_openai_native)、AstrBot（第三方边界说明见 [第三方说明](docs/THIRD_PARTY.md)）。
 
 ```sh
 python -m pip install -r requirements-dev.txt

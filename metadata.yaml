@@ -2,7 +2,7 @@ name: astrbot_plugin_ba_stats
 display_name: 断箭战报
 short_desc: "《断箭》玩家战绩查询，支持账号绑定与图片战报。"
 desc: "查询《断箭》（Broken Arrow）玩家概览、近期战绩和单局战报，支持账号绑定、群友查询及图片或文字展示。使用前需配置 BATrace 接入。"
-version: "0.1.0"
+version: "0.1.1"
 author: timeance
 repo: https://github.com/timeance/astrbot_plugin_BA_stats
 astrbot_version: ">=4.29.4"

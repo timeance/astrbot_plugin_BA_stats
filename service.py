@@ -20,7 +20,6 @@ class Caller:
     platform: str
     session: str
     user: str
-    prefix: str = "/ba"
 
     @property
     def scope(self):
@@ -31,6 +30,8 @@ class Caller:
 class Response:
     text: str = ""
     view: dict | None = None
+    # Keep commands separate from player-provided text; the adapter adds wake/At.
+    instructions: tuple[tuple[str, str], ...] = ()
 
 
 def ratio(numerator, denominator):
@@ -105,7 +106,7 @@ class StatsService:
         self._binding_lock = asyncio.Lock()
 
     def help(self, caller):
-        p = caller.prefix
+        p = "ba"
         return f"""【断箭战报】使用指南
 首次使用：{p} search 昵称 → 找到目标后发送 {p} bind stb:玩家ID → 按提示发送 {p} select <请求码> <序号> 确认一次即可。
 说明：绑定仅用于设定默认查询对象，不代表 Steam 账号所有权认证。
@@ -128,7 +129,8 @@ class StatsService:
 • steam:SteamID64 需等待权威映射确认，当前请先用昵称搜索再选择 STB ID。
 • 管理员命令：{p} status（查看状态）、{p} cache clear（清理缓存）。
 • 全插件每日固定上限 100 次（个人默认 20 次、每群默认 100 次），北京时间 0 点重置；按实际发出的上游 HTTP 请求计数（含重试与失败），命中缓存不计入。
-• 命令前缀遵循 AstrBot 配置；图片渲染失败时会自动回复同内容的文字战报。"""
+• 群聊请先 @ 机器人再发送命令；绑定候选超过 3 人时，请到 https://dash.batrace.top/ 搜索并使用 STB ID 绑定。
+• 图片渲染或发送未成功时会回复同内容的文字战报。"""
 
     def _mutation(self, caller):
         key = (caller.platform, caller.user)
@@ -173,17 +175,16 @@ class StatsService:
                         self.client.namespace, player.id, player.name, player.source_url or ""))
                 return Response(f"""已绑定默认账号：{player.name or '未命名玩家'}
 STB ID：{player.id}
-{player.source_url or ''}
-现在可以发送 {caller.prefix} me 查看战报。""")
+{player.source_url or ''}""", instructions=(("查看战报：", "ba me"),))
             return await self._report(original, candidate.id)
 
         generation = self.pending.begin(caller.scope)
         if action == "help":
-            return Response(self.help(caller))
+            return Response(self.help(caller), instructions=(("发送示例：", "ba me"),))
         if action == "binding":
             binding = await self.storage.get_binding(caller.platform, caller.user)
             if binding is None:
-                return Response(f"""你还没有绑定默认账号，请发送 {caller.prefix} bind name:昵称 进行绑定。""")
+                return Response("你还没有绑定默认账号。", instructions=(("绑定请发送：", "ba bind name:昵称"),))
             return Response(f"""当前默认账号：{binding.display_name or '未命名玩家'}
 STB ID：{binding.player_id}
 {binding.source_url}
@@ -203,8 +204,9 @@ STB ID：{binding.player_id}
             user = caller.user if target.kind == "me" else target.value
             binding = await self.storage.get_binding(caller.platform, user)
             if binding is None:
-                raise ValueError("你尚未绑定默认账号，请先使用 bind name:昵称 进行绑定。" if target.kind == "me"
-                                 else "对方尚未绑定默认游戏账号。")
+                if target.kind == "me":
+                    return Response("你尚未绑定默认账号。", instructions=(("绑定请发送：", "ba bind name:昵称"),))
+                raise ValueError("对方尚未绑定默认游戏账号。")
             if binding.namespace != self.client.namespace:
                 raise ValueError("当前绑定的账号属于其他数据源环境，与当前接入不一致，请重新绑定。")
             target = Target("stb", binding.player_id)
@@ -223,23 +225,30 @@ STB ID：{binding.player_id}
                 return await self._report(request, candidates[0].id)
         if action == "bind" and result.stale:
             raise ValueError("当前仅命中旧缓存，暂无法完成绑定核验，原绑定保持不变，请稍后重试。")
+        if action == "bind" and len(candidates) > 3:
+            if not self.pending.is_current(caller.scope, generation):
+                return Response("本次查询已被新操作覆盖，请使用最新的候选列表。")
+            return Response("匹配到超过 3 位玩家，请使用 STB ID 绑定。\n"
+                            "请前往 https://dash.batrace.top/ 搜索昵称，打开目标玩家主页，复制链接末尾的数字 ID。",
+                            instructions=(("取得 ID 后发送：", "ba bind stb:玩家ID"),))
         operation = Request("stats", limit=request.limit) if action == "search" else request
         selected = candidates[:10]
         pending = self.pending.publish(caller.scope, generation, operation, selected)
         if pending is None:
             return Response("本次查询已被新操作覆盖，请使用最新的候选列表。")
-        lines = ["选择后绑定此账号（只需确认一次）：" if action == "bind" else "请选择要查询的账号：",
-                 "以下为当前接口返回的候选（不代表全库完整结果）；如需缩小范围，请提供更准确的昵称。"]
+        lines = ["查询结果如下，请确认绑定账号：" if action == "bind" else "查询结果如下，请选择账号："]
         if len(candidates) == 1 and candidates[0].name != target.value and target.kind == "name":
             lines.append("仅找到相似昵称结果，请仔细核对 STB ID 与来源链接后再确认。")
         if result.stale:
             lines.append(f"旧缓存 · 抓取于 {result.fetched_at.isoformat()}")
         for index, player in enumerate(selected, 1):
             lines.extend([f"{index}. {player.name or '未命名玩家'} · STB ID：{player.id}",
-                          player.source_url or "来源链接暂无",
-                          f"{caller.prefix} select {pending.code} {index}"])
-        lines.append(f"""请在 120 秒内发送上方对应指令确认；取消请发送：{caller.prefix} cancel {pending.code}""")
-        return Response("\n".join(lines))
+                          player.source_url or "来源链接暂无"])
+        lines.append("---")
+        instructions = tuple((f"请在 120 秒内发送指令确认{'第 ' + str(index) + ' 项' if len(selected) > 1 else ''}：",
+                              f"ba select {pending.code} {index}") for index in range(1, len(selected) + 1))
+        instructions += (("取消请发送：", f"ba cancel {pending.code}"),)
+        return Response("\n".join(lines), instructions=instructions)
 
     async def _report(self, request, player_id):
         player_result = await self.client.player(player_id)

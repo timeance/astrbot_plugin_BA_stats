@@ -34,6 +34,18 @@ class At:
     qq: str | int
 
 
+class Result(tuple):
+    def __new__(cls, kind, value, chain=()):
+        result = super().__new__(cls, (kind, value))
+        result.chain = list(chain)
+        result.use_t2i_ = None
+        return result
+
+    def use_t2i(self, value):
+        self.use_t2i_ = value
+        return self
+
+
 class Event:
     def __init__(self, messages, *, admin=False, normalized=None, session="onebot:test:group:1",
                  user="10001", group="1", platform="onebot:test"):
@@ -44,6 +56,7 @@ class Event:
         self.normalized = normalized
         self.message_obj.sender.user_id = user
         self.group, self.platform = group, platform
+        self.sent = []
 
     def get_messages(self):
         return self.message_obj.message
@@ -73,10 +86,17 @@ class Event:
         self.stopped = True
 
     def plain_result(self, text):
-        return "plain", text
+        return Result("plain", text, [Plain(text)])
 
     def image_result(self, path):
-        return "image", path
+        return Result("image", path)
+
+    def chain_result(self, chain):
+        text = "".join(p.text if isinstance(p, Plain) else f"@{p.qq}" for p in chain)
+        return Result("plain", text, chain)
+
+    async def send(self, result):
+        self.sent.append(result)
 
 
 @pytest.fixture
@@ -223,7 +243,7 @@ def test_plain_text_cannot_forge_component_position(app_modules):
 ])
 async def test_handler_preserves_marker_text_for_nickname_targets(app, monkeypatch, command):
     plugin = await app.make()
-    execute = AsyncMock(return_value=SimpleNamespace(text="ok", view=None))
+    execute = AsyncMock(return_value=SimpleNamespace(text="ok", view=None, instructions=()))
     monkeypatch.setattr(plugin.service, "execute", execute)
     assert await collect(plugin, Event([Plain("/ba " + command)])) == [("plain", "ok")]
     request, _ = execute.await_args.args
@@ -252,7 +272,7 @@ async def test_unconfigured_plugin_help_works_and_online_command_explains_missin
 
 async def test_handler_passes_component_preserved_name_to_service(app, monkeypatch):
     plugin = await app.make(prefixes=["!!"])
-    execute = AsyncMock(return_value=SimpleNamespace(text="ok", view=None))
+    execute = AsyncMock(return_value=SimpleNamespace(text="ok", view=None, instructions=()))
     monkeypatch.setattr(plugin.service, "execute", execute)
     replies = await collect(plugin, Event(
         [Plain('!!ba stats name:"a '), Plain(' b"')], normalized='ba stats name:"a b"'
@@ -260,7 +280,7 @@ async def test_handler_passes_component_preserved_name_to_service(app, monkeypat
     assert replies == [("plain", "ok")]
     request, caller = execute.await_args.args
     assert request.target.value == "a  b"
-    assert caller.prefix == "!!ba"
+    assert caller.user == "10001"
 
 
 @pytest.mark.parametrize("command", ["status", "状态", "cache clear", "缓存 清理"])
@@ -336,10 +356,105 @@ async def test_image_failure_uses_same_result_as_text_without_second_fetch(app, 
     assert len(responses) == 1
     expected = plugin.renderer.text(plugin.renderer.views(responses[0].view)[0])
     assert replies == [("plain", expected)]
+    assert replies[0].use_t2i_ is False
     assert "001" in expected and "Synthetic a  b" in expected
     image.assert_awaited_once()
     client.player.assert_awaited_once_with("001")
     client.recent.assert_awaited_once_with("001", plugin.settings.max_limit)
+
+
+@pytest.mark.parametrize("wake", ["zar", "zariba", "/", "!!"])
+async def test_help_uses_bare_ba_and_real_self_mention(app, wake):
+    plugin = await app.make(prefixes=[wake])
+    result, = await collect(plugin, Event([At("999"), Plain(" ba help")]))
+    assert "• ba me：" in result[1]
+    assert wake + "ba" not in result[1]
+    assert "发送示例：@999 ba me" in result[1]
+    assert [part.qq for part in result.chain if isinstance(part, At)] == ["999"]
+    assert result.use_t2i_ is False
+
+
+@pytest.mark.parametrize("choice", ["select", "cancel"])
+async def test_binding_hints_round_trip_real_mentions_and_do_not_rewrite_names(app, monkeypatch, choice):
+    plugin = await app.make(prefixes=["zar"])
+    player = app.models.Player("152117", "zarba select stays literal", source_url="https://dash.batrace.top/player/152117")
+    result = app.models.FetchResult(player, datetime.now(timezone.utc))
+    monkeypatch.setattr(plugin.client, "player", AsyncMock(return_value=result))
+    offered, = await collect(plugin, Event([At("999"), Plain(" ba bind stb:152117")]))
+    assert player.name in offered[1]
+    assert [p.qq for p in offered.chain if isinstance(p, At)] == ["999", "999"]
+    commands = [p.text.strip() for p in offered.chain if isinstance(p, Plain) and p.text.startswith(" ba ")]
+    select, cancel = commands
+    assert select.startswith("ba select ") and cancel.startswith("ba cancel ")
+    assert select.split()[2] == cancel.split()[2]
+    confirmed, = await collect(plugin, Event([At("999"), Plain(" " + (select if choice == "select" else cancel))]))
+    if choice == "select":
+        assert "已绑定默认账号" in confirmed[1] and "@999 ba me" in confirmed[1]
+        assert (await plugin.storage.get_binding("onebot:test", "10001")).player_id == "152117"
+    else:
+        assert "已取消" in confirmed[1]
+        assert await plugin.storage.get_binding("onebot:test", "10001") is None
+
+
+async def test_unbound_self_uses_same_structured_binding_hint(app):
+    plugin = await app.make(prefixes=["zar"])
+    result, = await collect(plugin, Event([At("999"), Plain(" ba me")]))
+    assert "@999 ba bind name:昵称" in result[1]
+    assert [p.qq for p in result.chain if isinstance(p, At)] == ["999"]
+
+
+@pytest.mark.parametrize("needs_prefix", [False, True])
+async def test_private_hint_uses_host_wake_requirement_without_at(app, needs_prefix):
+    plugin = await app.make()
+    plugin.context.get_config = lambda umo: {"wake_prefix": ["zar"], "platform_settings": {
+        "friend_message_needs_wake_prefix": needs_prefix}}
+    result, = await collect(plugin, Event([Plain("zar ba help")], group=""))
+    assert not any(isinstance(p, At) for p in result.chain)
+    expected = "zar ba me" if needs_prefix else "ba me"
+    assert result[1].endswith("发送示例：" + expected)
+    args, _ = app.main.extract_arguments(Event([Plain(expected)], group=""), ["zar"])
+    assert app.main.parse_command(args).action == "stats"
+
+
+@pytest.mark.parametrize("failed_page", [None, 0, 1])
+async def test_report_delivery_failure_switches_remaining_pages_to_plain_text(app, monkeypatch, failed_page):
+    plugin = await app.make(images=True)
+    execute = AsyncMock(return_value=SimpleNamespace(text="", view={}, instructions=()))
+    monkeypatch.setattr(plugin.service, "execute", execute)
+    monkeypatch.setattr(plugin.renderer, "views", lambda view: [0, 1, 2])
+    monkeypatch.setattr(plugin.renderer, "text", lambda view: f"same data page {view}")
+    render = AsyncMock(side_effect=lambda view, umo: f"page-{view}.jpg")
+    monkeypatch.setattr(plugin, "_image", render)
+    event = Event([Plain("/ba stats stb:152117")])
+    attempted = []
+    async def send(result):
+        attempted.append(result)
+        if failed_page is not None and len(attempted) - 1 == failed_page:
+            raise RuntimeError("ActionFailed retcode=1200 synthetic transport timeout")
+    event.send = send
+    replies = await collect(plugin, event)
+    execute.assert_awaited_once()
+    if failed_page is None:
+        assert replies == [] and len(attempted) == render.await_count == 3
+    else:
+        assert len(attempted) == render.await_count == failed_page + 1
+        assert len(replies) == 3 - failed_page
+        assert "图片发送未获成功确认" in replies[0][1]
+        for index, reply in enumerate(replies, failed_page):
+            assert reply[1].endswith(f"same data page {index}")
+            assert reply.use_t2i_ is False
+
+
+async def test_cancelled_image_send_is_not_converted_to_fallback(app, monkeypatch):
+    plugin = await app.make(images=True)
+    monkeypatch.setattr(plugin.service, "execute", AsyncMock(return_value=SimpleNamespace(text="", view={}, instructions=())))
+    monkeypatch.setattr(plugin.renderer, "views", lambda view: [view])
+    monkeypatch.setattr(plugin, "_image", AsyncMock(return_value="synthetic.jpg"))
+    event = Event([Plain("/ba stats stb:001")])
+    event.send = AsyncMock(side_effect=asyncio.CancelledError)
+    with pytest.raises(asyncio.CancelledError):
+        await collect(plugin, event)
+    event.send.assert_awaited_once()
 
 
 async def test_image_render_uses_mobile_jpeg_contract_and_fixed_outer_template(app, monkeypatch, tmp_path):
@@ -468,7 +583,7 @@ async def test_handler_enforces_user_group_quota_and_preserves_cached_access(app
         assert len(calls) == 4
         # A fresh cached response consumes no upstream request, even at the cap.
         cached = await search("one", "u1", "g1")
-        assert "请选择" in cached[0][1]
+        assert "请选择账号" in cached[0][1]
         assert len(calls) == 4
         actor = app.main.QuotaActor("onebot:test", "u1", "g1")
         usage = await plugin.storage.quota_usage(actor)

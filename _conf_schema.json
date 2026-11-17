@@ -58,7 +58,7 @@
         "description": "启用中文子命令别名",
         "type": "bool",
         "default": true,
-        "hint": "如 /ba 帮助；英文主命令始终可用。"
+        "hint": "如 ba 帮助；群聊先 @ 机器人，英文主命令始终可用。"
       }
     }
   },
@@ -90,7 +90,7 @@
         "description": "发送图片战报",
         "type": "bool",
         "default": true,
-        "hint": "调用 AstrBot 图文渲染服务生成战报图；渲染失败时自动回退为同内容文字。"
+        "hint": "调用 AstrBot 图文渲染服务生成战报图；渲染或图片发送未成功时，使用同一查询结果回复文字，不重复查询。"
       },
       "theme": {
         "description": "图片主题",
