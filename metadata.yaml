@@ -1,0 +1,6 @@
+name: astrbot_plugin_ba_stats
+display_name: 断箭战报
+desc: "《断箭》（Broken Arrow）玩家查询、账号绑定、近期战绩与单局战报插件（需独立获准的 BATrace 接入）。"
+version: v0.1.0
+author: timeance
+repo: https://github.com/timeance/astrbot_plugin_BA_stats
