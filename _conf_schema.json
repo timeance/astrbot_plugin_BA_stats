@@ -78,6 +78,22 @@
         "default": true,
         "hint": "调用 AstrBot 图文渲染服务生成战报图；渲染或图片发送未成功时，使用同一查询结果回复文字，不重复查询。"
       },
+      "image_send_mode": {
+        "description": "图片发送方式",
+        "type": "string",
+        "default": "base64",
+        "options": [
+          "base64",
+          "file",
+          "url"
+        ],
+        "labels": [
+          "Base64（默认）",
+          "本地文件（NapCat 直读）",
+          "图片链接（NapCat 下载）"
+        ],
+        "hint": "本地文件需 NapCat 可读取图片路径；图片链接需渲染器返回可访问的 HTTP(S) 地址。发送失败记录 ERROR 并回复文字战报。"
+      },
       "theme": {
         "description": "图片主题",
         "type": "string",

@@ -59,23 +59,33 @@ def test_snapshot_is_schema_based_and_never_discloses_legacy_credentials(editor)
     fields = {field["path"]: field for field in snapshot["fields"]}
     assert fields["query.default_limit"]["value"] == 5
     assert fields["output.theme"]["options"] == ["dark", "light"]
+    assert fields["output.image_send_mode"]["value"] == "base64"
+    assert fields["output.image_send_mode"]["default"] == "base64"
+    assert fields["output.image_send_mode"]["options"] == ["base64", "file", "url"]
+    assert fields["output.image_send_mode"]["labels"] == [
+        "Base64（默认）", "本地文件（NapCat 直读）", "图片链接（NapCat 下载）"]
     assert "diagnostics.show_options" not in fields
     assert not snapshot["reload_required"] and not snapshot["diagnostics"]["enabled"]
 
 
-def test_partial_save_retains_unmodified_values_and_applies_only_diagnostics(editor):
+@pytest.mark.parametrize("image_send_mode", ["file", "url"])
+def test_partial_save_retains_unmodified_values_and_applies_only_diagnostics(editor, image_send_mode):
     original_settings = editor._running.copy()
-    result = save(editor, {"diagnostics.enabled": True, "query.default_limit": 6})
+    result = save(editor, {"diagnostics.enabled": True, "query.default_limit": 6,
+                           "output.image_send_mode": image_send_mode})
     assert editor.diagnostics.enabled and result["diagnostics_applied"]
     assert editor._running == original_settings
-    assert result["pending_restart"] == ["query.default_limit"]
+    assert editor._running["output.image_send_mode"] == "base64"
+    assert result["pending_restart"] == ["query.default_limit", "output.image_send_mode"]
     assert "手动重载" in result["message"]
     assert editor.config["access"]["api_token"] == "PRIVATE_TOKEN"
     assert editor.config["legacy_token"] == "PRIVATE_ROOT"
     stored = json.loads(editor.config.config_path.read_text(encoding="utf-8-sig"))
     assert stored["query"]["default_limit"] == 6
     assert stored["diagnostics"]["enabled"] is True
-    result = save(editor, {"query.default_limit": 5, "diagnostics.enabled": False})
+    assert stored["output"]["image_send_mode"] == image_send_mode
+    result = save(editor, {"query.default_limit": 5, "diagnostics.enabled": False,
+                           "output.image_send_mode": "base64"})
     assert not result["reload_required"] and not editor.diagnostics.enabled
 
 
@@ -86,6 +96,7 @@ def test_partial_save_retains_unmodified_values_and_applies_only_diagnostics(edi
     {"query.default_limit": 21}, {"query.cooldown_seconds": float("nan")},
     {"query.cooldown_seconds": float("inf")}, {"query.cooldown_seconds": 10 ** 1000},
     {"access.enabled": "true"}, {"diagnostics.enabled": 1}, {"output.theme": "auto"},
+    {"output.image_send_mode": "auto"}, {"output.image_send_mode": None},
     {"output.timezone": "Not/AZone"}, {"maintenance.concurrency": 6},
     {"access.base_url": "http://example.invalid"},
     {"access.base_url": "https://user:secret@example.invalid"},

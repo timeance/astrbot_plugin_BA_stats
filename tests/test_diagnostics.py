@@ -10,7 +10,7 @@ from zipfile import ZipFile
 
 import pytest
 
-from diagnostics import DiagnosticLog, MAX_TOTAL_BYTES
+from diagnostics import DiagnosticLog, MAX_TOTAL_BYTES, image_error_metadata
 
 
 def unpack(data):
@@ -24,6 +24,23 @@ def unpack(data):
         assert not content or content.endswith(b"\n")
         records.extend(json.loads(line) for line in content.splitlines())
     return contents, records
+
+
+def test_image_metadata_allowlist_and_console_fields_share_redaction(tmp_path):
+    log = DiagnosticLog(tmp_path, enabled=True)
+    error = RuntimeError("base64://do-not-print https://host/?signature=secret chat text")
+    error.result = {"retcode": 1200, "message": "Timeout: sendMsg base64://secret https://host/?key=secret private chat"}
+    fields = image_error_metadata(error, "url", "send")
+    assert fields == {"mode": "url", "stage": "send", "error": "RuntimeError", "reason": "send_failed",
+                      "retcode": 1200, "message": "Timeout: sendMsg"}
+    assert log.record("image_send_error", **fields, width=900, height=1200, content_type="image/jpeg")
+    assert log.record("image_validated", mode="url?secret", stage="secret", width="secret", height=True,
+                      reason="secret", content_type="image/jpeg; secret")
+    contents, records = unpack(log.export_zip())
+    assert "secret" not in b"".join(contents.values()).decode()
+    assert records[0]["width"] == 900 and records[0]["height"] == 1200
+    assert records[0]["content_type"] == "image/jpeg"
+    assert set(records[1]) == {"timestamp", "event"}
 
 
 def test_default_disabled_switch_and_permanent_close(tmp_path):

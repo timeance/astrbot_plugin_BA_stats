@@ -46,6 +46,7 @@ class Settings:
     cooldown_seconds: float = 3
     chinese_aliases: bool = True
     image_enabled: bool = True
+    image_send_mode: str = "base64"
     theme: str = "dark"
     timezone: str = "Asia/Shanghai"
     request_interval: float = 1
@@ -77,6 +78,9 @@ class Settings:
         theme = output.get("theme", "dark")
         if theme not in {"dark", "light"}:
             raise ValueError("主题必须为 dark 或 light。")
+        image_send_mode = output.get("image_send_mode", "base64")
+        if image_send_mode not in ("base64", "file", "url"):
+            raise ValueError("图片发送方式必须为 base64、file 或 url。")
         return cls(
             enabled=bool(access.get("enabled", False)),
             base_url=str(access.get("base_url", cls.base_url)).strip(),
@@ -85,6 +89,7 @@ class Settings:
             cooldown_seconds=bounded(query, "cooldown_seconds", 3, 0, 60),
             chinese_aliases=bool(query.get("chinese_aliases", True)),
             image_enabled=bool(output.get("image_enabled", True)),
+            image_send_mode=image_send_mode,
             theme=theme, timezone=timezone,
             request_interval=bounded(maintenance, "request_interval", 1, 0.1, 60),
             concurrency=bounded(maintenance, "concurrency", 2, 1, 5, int),

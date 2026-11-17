@@ -83,6 +83,9 @@ async def main():
     os.environ["TMP"] = os.environ["TEMP"] = str(temporary)
     tempfile.tempdir = str(temporary)
     snapshot = fixture()
+    image_mode = next(field for field in snapshot["fields"] if field["path"] == "output.image_send_mode")
+    assert image_mode["default"] == image_mode["value"] == "base64"
+    assert image_mode["options"] == ["base64", "file", "url"]
     checks = []
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
@@ -111,6 +114,10 @@ async def main():
                 assert await page.locator("#diagnostics details").get_attribute("open") is None
                 assert await page.locator("#maintenance details").get_attribute("open") is None
                 assert await page.locator("#setting-access-client_id, #setting-access-api_token").count() == 0
+                image_select = page.locator("#setting-output-image_send_mode")
+                assert await image_select.input_value() == "base64"
+                assert await image_select.locator("option").evaluate_all("options => options.map(option => option.value)") == ["base64", "file", "url"]
+                assert await image_select.locator("option:checked").inner_text() == "Base64（默认）"
                 await page.evaluate("""() => {
                   const p = document.createElement('p'); p.textContent = '合成预览 · 非运行实例';
                   p.className = 'muted'; document.querySelector('h1').after(p);
@@ -134,6 +141,21 @@ async def main():
                 assert (await page.evaluate("window.__downloads[0]")) == ["diagnostics/download", {}, "ba-stats-diagnostics.zip"]
                 await page.screenshot(path=str(OUTPUT / f"settings-diagnostics-{theme}-{label}.png"), full_page=True)
 
+                await page.locator('[data-section="common"]').click()
+                for mode in ("file", "url"):
+                    await image_select.select_option(mode)
+                    assert not await page.locator("#save").is_disabled()
+                    await page.locator("#save").click()
+                    await page.wait_for_function("document.getElementById('save-status').textContent.includes('手动重载')")
+                    post = await page.evaluate("window.__posts.at(-1)")
+                    assert post["path"] == "settings/config" and post["payload"]["changes"] == {"output.image_send_mode": mode}
+                    state = await page.evaluate("window.__state")
+                    assert state["reload_required"] and state["pending_restart"] == ["output.image_send_mode"]
+                    assert await image_select.input_value() == mode
+                    assert await image_select.locator("..").get_attribute("data-pending") == "true"
+                    assert "手动重载" in await page.locator("#apply-state").inner_text()
+                    assert await page.locator("#save").is_disabled()
+
                 await page.locator('[data-section="limits"]').click()
                 await page.locator("#setting-limits-user_daily_limit").fill("21")
                 await page.evaluate("window.__conflict = true")
@@ -154,6 +176,7 @@ async def main():
                 assert dimensions["documentWidth"] <= width and not errors and not external
                 checks.append({"theme": theme, "viewport": label, **dimensions, "passed": True,
                                "checks": ["host theme", "default collapsed", "diagnostic save", "download route",
+                                          "image mode defaults to Base64", "file save pending restart", "url save pending restart",
                                           "conflict preserves draft", "reload preserves draft", "restart indication", "fixed global quota"],
                                "page_errors": errors, "external_requests": external})
                 await context.close()
