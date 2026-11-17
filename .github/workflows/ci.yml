@@ -49,3 +49,7 @@ jobs:
           PY
       - name: Check Python syntax
         run: python -m compileall -q .
+      - name: Run offline tests
+        run: python -m pytest -q
+      - name: Build and verify delivery archives
+        run: python tools/build_delivery.py --output dist

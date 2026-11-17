@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% from "_macros.html" import exchange, outcome %}
+{% block identity %}
+  <h1>{{ view.match.map_name }}</h1>
+  <p class="identity-meta">对局 ID：{{ view.match.id }}</p>
+  {% if view.player.id != '暂无' %}<p class="identity-meta">{{ view.player.name }} · 玩家 ID：{{ view.player.id }}</p>{% endif %}
+{% endblock %}
+{% block content %}
+<section class="match-meta" aria-label="对局信息">
+  <div><p class="metric-label">模式</p><p class="value">{{ view.match.mode }}</p></div>
+  <div><p class="metric-label">胜方</p><p class="value">{{ view.match.winner }}</p></div>
+  <div><p class="metric-label">时间</p><p class="value">{{ view.match.started_at }}</p></div>
+  <div><p class="metric-label">时长</p><p class="value">{{ view.match.duration }}</p></div>
+</section>
+{% for team in view.teams %}
+<section class="team">
+  <div class="team-heading"><h2>{{ team.name }}<span class="team-size">{{ team.players | length }} 人</span></h2>{{ outcome(team.outcome) }}</div>
+  {% if team.players %}
+  <ul class="player-list">
+    {% for player in team.players %}
+    <li class="participant">
+      <h3>{{ player.name }}</h3><p class="participant-id">玩家 ID：{{ player.id }}</p>
+      {{ exchange(player.metrics) }}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="empty">队员：暂无</p>{% endif %}
+</section>
+{% else %}<p class="empty">分队与玩家：暂无</p>{% endfor %}
+{% endblock %}

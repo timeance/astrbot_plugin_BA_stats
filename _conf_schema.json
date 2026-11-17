@@ -1,0 +1,165 @@
+{
+  "access": {
+    "type": "object",
+    "description": "数据源接入",
+    "items": {
+      "enabled": {
+        "description": "启用在线查询",
+        "type": "bool",
+        "default": false,
+        "hint": "请先取得 BATrace 对本插件的独立接入许可，填写获准客户端标识后再开启。",
+        "obvious_hint": true
+      },
+      "client_id": {
+        "description": "获准客户端标识",
+        "type": "string",
+        "default": "",
+        "hint": "由 BATrace 运营方为本插件单独分配，请勿借用其他项目的标识。",
+        "secret": true
+      },
+      "api_token": {
+        "description": "访问令牌（如需要）",
+        "type": "string",
+        "default": "",
+        "hint": "仅在运营方要求 Bearer 令牌时填写。",
+        "secret": true
+      },
+      "base_url": {
+        "description": "API 地址",
+        "type": "string",
+        "default": "https://bot.batrace.top",
+        "hint": "以运营方确认的 HTTPS 地址为准。"
+      }
+    }
+  },
+  "query": {
+    "type": "object",
+    "description": "查询与命令",
+    "items": {
+      "default_limit": {
+        "description": "默认近期场数",
+        "type": "int",
+        "default": 5,
+        "hint": "范围 1 到「最大近期场数」之间。"
+      },
+      "max_limit": {
+        "description": "最大近期场数",
+        "type": "int",
+        "default": 20,
+        "hint": "上限 20；仅展示当前接口返回的样本，不代表玩家完整生涯历史。"
+      },
+      "cooldown_seconds": {
+        "description": "同一用户查询间隔（秒）",
+        "type": "float",
+        "default": 3.0,
+        "hint": "限制查询命令的触发间隔，命中缓存也适用；帮助、查看绑定、解绑、额度查看及候选确认不受此冷却限制。"
+      },
+      "chinese_aliases": {
+        "description": "启用中文子命令别名",
+        "type": "bool",
+        "default": true,
+        "hint": "如 /ba 帮助；英文主命令始终可用。"
+      }
+    }
+  },
+  "limits": {
+    "type": "object",
+    "description": "每日请求额度",
+    "hint": "全插件每天最多 100 次上游请求，此总上限固定不可修改。所有额度北京时间每天 0 点重置；保存后重载插件生效，不清零已用次数。",
+    "items": {
+      "user_daily_limit": {
+        "description": "每用户每日请求额度",
+        "type": "int",
+        "default": 20,
+        "hint": "0–100；0 表示不单独限制，仍受全插件每日 100 次上限约束。同一平台用户跨群及私聊累计；按实际上游 HTTP 请求计数，重试及失败计入，命中缓存不计入。",
+        "obvious_hint": true
+      },
+      "group_daily_limit": {
+        "description": "每群每日请求额度",
+        "type": "int",
+        "default": 100,
+        "hint": "0–100；0 表示不单独限制，仍受全插件每日 100 次上限约束。群内所有用户共用，私聊不扣群额度。管理员查询同样计入。"
+      }
+    }
+  },
+  "output": {
+    "type": "object",
+    "description": "战报显示",
+    "items": {
+      "image_enabled": {
+        "description": "发送图片战报",
+        "type": "bool",
+        "default": true,
+        "hint": "调用 AstrBot 图文渲染服务生成战报图；渲染失败时自动回退为同内容文字。"
+      },
+      "theme": {
+        "description": "图片主题",
+        "type": "string",
+        "default": "dark",
+        "options": [
+          "dark",
+          "light"
+        ],
+        "labels": [
+          "深色",
+          "浅色"
+        ]
+      },
+      "timezone": {
+        "description": "显示时区",
+        "type": "string",
+        "default": "Asia/Shanghai",
+        "hint": "IANA 时区名，例如 Asia/Shanghai 或 Asia/Hong_Kong。仅改变战报显示，额度仍固定按北京时间 0 点重置。"
+      }
+    }
+  },
+  "maintenance": {
+    "type": "object",
+    "description": "维护与请求限制",
+    "items": {
+      "request_interval": {
+        "description": "上游请求最小间隔（秒）",
+        "type": "float",
+        "default": 1.0,
+        "hint": "根据获准接入频率调整，对所有在线查询全局生效。"
+      },
+      "concurrency": {
+        "description": "上游并发上限",
+        "type": "int",
+        "default": 2
+      },
+      "queue_size": {
+        "description": "待处理请求上限",
+        "type": "int",
+        "default": 20
+      },
+      "request_timeout": {
+        "description": "单次请求超时（秒）",
+        "type": "float",
+        "default": 20.0
+      },
+      "wait_timeout": {
+        "description": "总等待上限（秒）",
+        "type": "float",
+        "default": 45.0
+      },
+      "retries": {
+        "description": "临时故障重试次数",
+        "type": "int",
+        "default": 1,
+        "hint": "范围 0–2 次；鉴权失败、人机验证及数据结构错误不会重试。"
+      },
+      "cache_max_entries": {
+        "description": "API 缓存容量（条）",
+        "type": "int",
+        "default": 1000
+      },
+      "stale_hours": {
+        "description": "故障时旧缓存最长保留（小时）",
+        "type": "float",
+        "default": 24.0,
+        "hint": "0 表示禁用旧缓存回退；使用旧缓存时战报会明确标明抓取时间。"
+      }
+    }
+  }
+}
