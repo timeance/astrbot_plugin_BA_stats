@@ -25,7 +25,7 @@ class Request:
     target: Target | None = None
     limit: int = 5
     code: str = ""  # match ID for match; request code for select/cancel
-    index: int = 0  # one-based candidate index
+    index: int = 0  # one-based candidate or recent match; 0 means unspecified
 
 
 _ALIASES = {
@@ -36,6 +36,7 @@ _ALIASES = {
     "取消": "cancel", "状态": "status", "缓存": "cache", "清理": "clear", "额度": "quota",
 }
 _NUMBER = re.compile(r"[0-9]+\Z")
+LAST_INDEX_MAX = 10
 
 
 def mention_token(index: int) -> str:
@@ -76,14 +77,23 @@ def _target(parts: list[str], mentions: dict[str, str], aliases: bool) -> Target
     return Target("name", value)
 
 
-def _count(value: str, maximum: int) -> int:
+def _count(value: str, maximum: int, label: str = "对局数量") -> int:
     try:
         count = int(value) if _NUMBER.fullmatch(value) else 0
     except ValueError:
         count = 0
     if not 1 <= count <= maximum:
-        raise ValueError(f"对局数量须为 1 到 {maximum} 的整数。")
+        raise ValueError(f"{label}须为 1 到 {maximum} 的整数。")
     return count
+
+
+def _last_self(parts: list[str], default_limit: int) -> Request:
+    if not parts:
+        return Request("last", Target("me", ""), default_limit)
+    if len(parts) != 1:
+        raise ValueError("用法：me last [序号]。")
+    index = _count(parts[0], LAST_INDEX_MAX, "场次序号")
+    return Request("last", Target("me", ""), default_limit, index=index)
 
 
 def parse_command(
@@ -127,10 +137,10 @@ def parse_command(
         if compact:
             parts.insert(0, compact[1])
             subcommand = "recent"
-        if subcommand == "last" and not parts:
-            return Request("last", Target("me", ""), default_limit)
+        if subcommand == "last":
+            return _last_self(parts, default_limit)
         if subcommand != "recent" or len(parts) > 1:
-            raise ValueError("用法：me、me recent [数量] 或 me last。")
+            raise ValueError("用法：me、me recent [数量] 或 me last [序号]。")
         limit = _count(parts[0], max_limit) if parts else default_limit
         return Request("recent", Target("me", ""), limit)
     if action in {"help", "binding", "unbind", "status", "quota"}:
@@ -175,7 +185,7 @@ def parse_command(
         target = _target(parts, trusted_mentions, chinese_aliases) if parts else Target("me", "")
         return Request("recent", target, limit)
     if action in {"stats", "bind", "last"}:
-        if action == "last" and not parts:
-            return Request("last", Target("me", ""), default_limit)
+        if action == "last" and (not parts or (len(parts) == 1 and re.fullmatch(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)", parts[0]))):
+            return _last_self(parts, default_limit)
         return Request(action, _target(parts, trusted_mentions, chinese_aliases), default_limit)
     raise ValueError("未知命令，请使用 ba help 查看帮助。")

@@ -21,6 +21,9 @@ from commands import Request, Target, mention_token, parse_command
      Request("recent", Target("steam", "76561198012345678"), 10)),
     ("last", Request("last", Target("me", ""))),
     ("me last", Request("last", Target("me", ""))),
+    ("last 2", Request("last", Target("me", ""), index=2)),
+    ("me last 10", Request("last", Target("me", ""), index=10)),
+    ("上一场 1", Request("last", Target("me", ""), index=1)),
     ("last stb:001", Request("last", Target("stb", "001"))),
     ("match 00098765432109876543210", Request("match", code="00098765432109876543210")),
     ("search Player 2", Request("search", Target("name", "Player 2"))),
@@ -117,10 +120,16 @@ def test_real_mentions_are_not_converted_into_nickname_queries(text):
 
 
 @pytest.mark.parametrize("text", [
-    "stats 12345", "bind 12345", "last 12345", "recent 123 --limit 5",
+    "stats 12345", "bind 12345", "recent 123 --limit 5",
 ])
 def test_bare_numeric_player_is_ambiguous(text):
     with pytest.raises(ValueError, match="stb:.*steam:.*name:"):
+        parse_command(text)
+
+
+@pytest.mark.parametrize("text", ["last 0", "last 11", "last -1", "last 1.5", "me last 11"])
+def test_last_index_has_its_own_range(text):
+    with pytest.raises(ValueError, match="场次序号须为 1 到 10"):
         parse_command(text)
 
 

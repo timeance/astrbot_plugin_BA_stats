@@ -323,16 +323,68 @@ async def test_other_namespace_binding_is_rejected_before_upstream_query(h, targ
     assert await binding(h) == old
 
 
-async def test_last_skips_unrecorded_details_and_returns_next_available_match(h):
+@pytest.mark.parametrize("command", ["last", "last stb:001"])
+async def test_last_skips_unrecorded_details_and_returns_next_available_match(h, command):
+    await seed(h, player_id=h.player.id)
     person = h.m.Participant("001", "Synthetic")
     newest = h.m.Match("new", players=[person])
     available = h.m.Match("old", players=[person], complete=True)
     h.client.recent.return_value = h.result([newest, available])
     h.client.match.side_effect = [h.modules.client.NoDataError("暂无收录"), h.result(available)]
-    response = await h.run("last stb:001")
+    response = await h.run(command)
     assert response.view["match"]["id"] == "old"
     assert h.client.match.await_args_list == [call("new"), call("old")]
     assert response.view["player"]["id"] == "001"
+
+
+async def test_numbered_last_selects_the_nth_recent_match_for_the_bound_player(h):
+    await seed(h, player_id=h.player.id)
+    person = h.m.Participant(h.player.id, h.player.name)
+    second = h.m.Match("second", players=[person], complete=True)
+    h.client.recent.return_value = h.result([
+        h.m.Match("newest", players=[person]),
+        h.m.Match("unknown-roster"),
+        second,
+        h.m.Match("older", players=[person]),
+    ])
+    h.client.match.return_value = h.result(second)
+
+    response = await h.run("last 2")
+
+    assert response.view["match"]["id"] == second.id
+    assert response.view["player"]["id"] == h.player.id
+    h.client.match.assert_awaited_once_with(second.id)
+
+
+async def test_numbered_last_does_not_fetch_details_when_the_nth_recent_match_is_missing(h):
+    await seed(h, player_id=h.player.id)
+    person = h.m.Participant(h.player.id, h.player.name)
+    h.client.recent.return_value = h.result([
+        h.m.Match("unknown-roster"),
+        h.m.Match("only", players=[person]),
+    ])
+
+    response = await h.run("last 2")
+
+    h.client.match.assert_not_awaited()
+    assert response.view is None
+    assert response.text
+
+
+async def test_numbered_last_does_not_fall_back_when_the_selected_detail_is_unavailable(h):
+    await seed(h, player_id=h.player.id)
+    person = h.m.Participant(h.player.id, h.player.name)
+    newest = h.m.Match("newest", players=[person], complete=True)
+    second = h.m.Match("second", players=[person])
+    older = h.m.Match("older", players=[person], complete=True)
+    h.client.recent.return_value = h.result([newest, second, older])
+    h.client.match.side_effect = [h.modules.client.NoDataError("暂无收录"), h.result(older)]
+
+    response = await h.run("last 2")
+
+    h.client.match.assert_awaited_once_with(second.id)
+    assert response.view is None
+    assert response.text
 
 
 async def test_last_does_not_describe_authentication_failure_as_missing_match(h):

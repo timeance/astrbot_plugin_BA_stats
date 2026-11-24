@@ -10,6 +10,7 @@ import time
 
 from .client import participant_for
 from .commands import Request, Target
+from .map_names import display_map_name
 from .match_honors import match_honors
 from .models import FetchResult, Match, Participant, Player, analysis_outcomes, win_rate_sample
 from .pending import PendingManager
@@ -75,11 +76,13 @@ def outcome_view(result):
 
 
 def map_name(match, player=None):
+    name = match.map_name
     if player is not None and match.map_id is not None:
         for row in player.analysis.get("mapPerformance", []):
             if row["mapId"] == match.map_id and row["mapName"]:
-                return row["mapName"]
-    return match.map_name
+                name = row["mapName"]
+                break
+    return display_map_name(match.map_id, name)
 
 
 def recent_rows(matches, player_id, player=None, *, with_scores=True):
@@ -286,7 +289,8 @@ class StatsService:
 • {p} stats <玩家>：查看指定玩家概览（支持 me / @群友 / stb:ID / name:昵称）
 • {p} recent [数量] / {p} me recent [数量]：查看自己近期战绩（默认 {self.settings.default_limit} 场）
 • {p} recent <玩家> --limit <数量>：查看指定玩家近期战绩（如 {p} recent name:"Player 2" --limit 10）
-• {p} last [玩家] / {p} me last：查看最近一场可用单局战报
+• {p} last [玩家]：查看最近一场可用战报
+• {p} last <序号> / {p} me last <序号>：按近期战绩顺序查看自己的第 1–10 场，例如 {p} last 2
 • {p} match <对局ID>：查看指定单局战报
 • {p} search <昵称>：搜索玩家候选
 • {p} bind <玩家> / {p} binding / {p} unbind：绑定、查看或解除默认账号
@@ -426,21 +430,28 @@ STB ID：{binding.player_id}
         if player.id != player_id:
             raise ValueError("上游返回的玩家身份与请求不一致。")
         limit = request.limit if request.action == "recent" else self.settings.max_limit
+        if request.action == "last":
+            limit = max(limit, request.index)
         result = await self.client.recent(player.id, limit)
         matches = result.data
         if request.action == "last":
-            for match in matches:
-                if participant_for(match, player.id) is None:
+            visible = (m for m in matches if participant_for(m, player.id) is not None)
+            for position, match in enumerate(visible, start=1):
+                if request.index and position != request.index:
                     continue
                 try:
                     detail = await self.client.match(match.id)
                 except Exception as exc:
                     if getattr(exc, "code", "") in {"not_found", "not_recorded", "no_data"}:
+                        if request.index:
+                            return Response(f"第 {position} 场（#{match.id}）暂无单局战报。")
                         continue
                     raise
                 view = match_view(detail, player, recent_match=match)
                 view.update(freshness(player_result, result, detail))
                 return Response(view=view)
+            if request.index:
+                return Response(f"{player.name} 的近期战绩中没有第 {request.index} 场。")
             return Response(f"{player.name} · STB ID：{player.id}\n当前返回样本中暂无可用单局战报。\n{player.source_url or ''}")
         rows = recent_rows(matches, player.id, player, with_scores=request.action == "recent")
         times = [m.started_at for m in matches if m.started_at and any(p.player_id == player.id for p in m.players)]
@@ -458,7 +469,7 @@ STB ID：{binding.player_id}
             view["profile_rating"] = profile_rating(matches, player.id, player.analysis)
             view["metrics"] = overview_metrics(player, rows)
             view["common_units"] = common_units(player, matches)
-            view["map_stats"] = [{"name": m["mapName"] or f"地图#{m['mapId']}",
+            view["map_stats"] = [{"name": display_map_name(m["mapId"], m["mapName"]),
                                   "count": m["matchCount"], "win_rate": m["winRate"]}
                                  for m in player.analysis.get("mapPerformance", [])[:5]]
             analysis_count = player.analysis.get("matchCount")
