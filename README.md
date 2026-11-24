@@ -8,6 +8,18 @@ AstrBot 原生《断箭》（Broken Arrow）战绩查询插件。以简洁排版
 
 > 数据来源 [BATrace](https://dash.batrace.top/)，如有帮助请支持该平台。更新内容见 [更新日志](CHANGELOG.md)。
 
+## 战报示例
+
+以下示例均使用模拟数据，点击图片可查看大图。
+
+| `ba last` · 浅色 | `ba last` · 深色 |
+| --- | --- |
+| [![单局战报浅色示例](docs/examples/last-light.png)](docs/examples/last-light.png) | [![同一场对局的深色战报](docs/examples/last-dark.png)](docs/examples/last-dark.png) |
+
+| `ba recent` · 浅色 | `ba me` · 浅色 |
+| --- | --- |
+| [![近期五场战绩](docs/examples/recent-light.png)](docs/examples/recent-light.png) | [![玩家概览和五维表现](docs/examples/me-light.png)](docs/examples/me-light.png) |
+
 ## 快速开始
 
 1. **安装插件**：在 AstrBot 的插件页面通过仓库链接在线安装：`https://github.com/timeance/astrbot_plugin_BA_stats`。
@@ -33,7 +45,8 @@ AstrBot 原生《断箭》（Broken Arrow）战绩查询插件。以简洁排版
 | `ba me recent [count]` | 与 `ba recent [count]` 等价 |
 | `ba recent <target> --limit N` | 查看指定玩家近期最多 `N` 场战绩 |
 | `ba last [target]` | 查看自己或指定玩家最近一场可用单局战报 |
-| `ba me last` | 与 `ba last` 等价 |
+| `ba last <序号>` | 查看自己近期第 1–10 场的战报。`ba last 2` 对应 `ba recent` 的第二条 |
+| `ba me last [序号]` | 与 `ba last [序号]` 等价 |
 | `ba match <match-id>` | 查看指定对局 ID 的单局战报 |
 | `ba search <query>` | 搜索玩家候选，选择后查看概览 |
 | `ba bind <target>` | 设置默认查询账号（不验证账号归属） |
