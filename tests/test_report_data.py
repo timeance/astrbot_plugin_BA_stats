@@ -324,7 +324,7 @@ def test_match_rating_times_reach_summary_from_real_payload(report, a_before):
     assert ('<dt>赛前平均 ELO</dt><dd>暂无</dd>' in summary) is (a_before is None)
     for rating in (1620, 1580):
         assert f'<dt>赛后平均 ELO</dt><dd>{rating}</dd>' in summary
-    assert "赛后平均 ELO：1620 / 1580" in text
+    assert "赛后平均 ELO：1620" in text and "赛后平均 ELO：1580" in text
     assert "当前平均 ELO" not in html + text
 
 

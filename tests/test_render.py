@@ -157,7 +157,7 @@ def test_real_zero_and_unknown_stay_distinct(view):
             assert compact(value) in compact(output)
 
 
-def test_exchange_values_are_separate_and_not_recalculated(view):
+def test_match_scoreboard_distinguishes_net_value_from_kill_counts(view):
     view.update(kind="match", teams=[{"name": "A 队", "players": [{
         "id": "ratios", "kills": 8, "losses": 2, "unit_exchange": 4,
         "destroyed_value": 2500.5, "lost_value": 0, "value_exchange": 1.249,
@@ -165,9 +165,8 @@ def test_exchange_values_are_separate_and_not_recalculated(view):
     renderer = Renderer()
     html_text = compact(VisibleHTML(renderer.template(view)).text)
     text = renderer.text(view)
-    for label, value in [("击杀 / 阵亡", "8 / 2"), ("摧毁 / 损失", "2,500.5 / 0"), ("分值 K/D", "1.25")]:
-        assert f"{label}：{value}" in text
-        assert compact(value) in html_text
+    for value in ("8 / 2", "+2,500.5"):
+        assert value in text and compact(value) in html_text
 
 
 def test_stale_and_absent_timestamps_are_visible(view):
@@ -374,21 +373,22 @@ def test_recent_score_precedes_match_and_has_color_without_title(view):
         assert "第 1/1 页" not in output and "击杀 / 阵亡" not in output
 
 
-def test_match_retains_known_target_result_and_fractional_resource_values(view):
+def test_only_selected_member_has_a_hero_and_personal_highlight_reasons(view):
     view.update(kind="match", match={"id": "42", "target_outcome": "loss"}, teams=[
         {"name": "A 队", "players": [{"id": view["player"]["id"], "name": "查询玩家",
-                                      "objectives": 3, "spawned_value": 1234.5, "supply": 12.5},
+                                      "objectives": 3, "score": 8.0, "score_band": "high",
+                                      "honors": [{"name": "侦察尖刀", "positive": True, "reason": "侦察击杀 9 个"}]},
                                      {"id": "other", "name": "另一玩家", "spawned_value": 991171}]},
     ])
     renderer = Renderer()
     for output in (renderer.text(view), VisibleHTML(renderer.template(view)).text):
-        for value in ("失利", "1,234.5", "12.5", "占点"):
+        for value in ("失利", "8.0", "侦察击杀 9 个", "占点"):
             assert value in output
         assert "另一玩家" in output and "991,171" not in output
-    assert renderer.template(view).count('class="participant-detail target"') == 1
+    assert renderer.template(view).count('class="match-hero"') == 1
     direct = {key: value for key, value in view.items() if key != "player"}
-    assert 'class="participant-detail' not in renderer.template(direct)
-    assert "1,234.5" not in renderer.text(direct)
+    assert 'class="match-hero"' not in renderer.template(direct)
+    assert "侦察击杀 9 个" not in renderer.text(direct)
 
 
 def test_match_sections_and_footer_are_shared_across_cards(view):
@@ -405,8 +405,9 @@ def test_match_sections_and_footer_are_shared_across_cards(view):
     assert html.count("<thead>") == 1 and html.count('<tbody class="team">') == 2
     assert html.count('class="participant target"') == 1
     for output in (renderer.text(view), VisibleHTML(html).text):
-        for value in ("64%", "36%", "234", "227", "步兵", "60%", "甲", "乙", "查询玩家"):
+        for value in ("64%", "36%", "234", "227", "步兵", "60%", "甲", "乙"):
             assert value in output
+        assert "查询玩家" not in output
     assert "timeance/astrbot_plugin_BA_stats" in html and "数据来源 BATracer" in html
     assert "data:image/svg+xml;base64," in html
 
@@ -504,7 +505,9 @@ def test_composition_compares_each_original_share_with_one_shared_bar(view):
     assert widths == pytest.approx([100 * 40 / 60, 100 * 20 / 60, 100 * 60 / 140, 100 * 80 / 140])
     assert "装甲：40% / 20%" in Renderer().text(view)
     assert "步兵：60% / 80%" in Renderer().text(view)
-    assert "左A队（深）右B队（浅）" in compact(VisibleHTML(html).text)
+    assert "（深）" not in VisibleHTML(html).text
+    view["match"] = {"winner": "B 队"}
+    assert "左A队（浅）右B队（深）" in compact(VisibleHTML(Renderer().template(view)).text)
 
 
 @pytest.mark.parametrize("a,b,expected", [(0, 0, None), (None, 20, None), (20, None, None), (0, 20, 0)])

@@ -1,15 +1,57 @@
 {% extends "base.html" %}
-{% from "_macros.html" import comparison, outcome %}
+{% from "_macros.html" import comparison, honor, match_score, outcome %}
+{% set winner_side = view.winner_side %}
+{% set has_winner = winner_side in ('a', 'b') %}
+
+{% block title %}{{ view.title }}{% if view.match.map_name != '暂无' %} · {{ view.match.map_name }}{% endif %}{% if view.match.id != '暂无' %} · #{{ view.match.id }}{% endif %}{% endblock %}
 {% block identity %}
-  <h1>{{ view.match.map_name }}</h1>
-  <p class="identity-meta">对局 ID：{{ view.match.id }}</p>
-  {% if view.player.id != '暂无' %}<p class="identity-meta">{{ view.player.name }} · 玩家 ID：{{ view.player.id }}{% if view.match.target_outcome.key != 'unknown' %} · {{ outcome(view.match.target_outcome) }}{% endif %}</p>{% endif %}
-  <p class="identity-meta">{{ view.match.started_at }} · {{ view.match.duration }}{% if view.match.mode != '暂无' %} · {{ view.match.mode }}{% endif %}{% if view.match.winner != '暂无' %} · 胜方 {{ view.match.winner }}{% endif %}</p>
+  <div class="match-map">
+    <div>
+      <h1>{{ view.match.map_name if view.match.map_name != '暂无' else '地图暂无' }}</h1>
+      <p class="identity-meta">
+        {% if view.match.mode != '暂无' %}{{ view.match.mode }} · {% endif %}
+        {{ view.match.started_at }} · {{ view.match.duration }}
+        {% if view.match.id != '暂无' %} · 对局 ID：{{ view.match.id }}{% endif %}
+        {% if view.match.target_outcome.key != 'unknown' %} · {{ outcome(view.match.target_outcome) }}{% endif %}
+      </p>
+    </div>
+    {% if has_winner %}<span class="match-victory">{{ winner_side | upper }} 队胜利</span>{% endif %}
+  </div>
 {% endblock %}
 {% block content %}
+{% set member = view.target_member %}
+{% set honors = (member.honors | default([])) if member else [] %}
+{% if member %}
+<section class="match-hero" aria-labelledby="match-player">
+  <div class="match-player">
+    <div class="match-player-heading">
+      <h2 id="match-player">{{ member.name }}</h2>
+      {% if honors %}{{ honor(honors[0]) }}{% endif %}
+    </div>
+    <p class="match-elo">ELO <strong>{{ member.elo }}</strong>
+      {% if member.elo_delta != '暂无' %}
+      <span{% if member.elo_delta[:1] == '+' %} class="match-gain"{% endif %}>{{ member.elo_delta }}</span>
+      {% endif %}
+    </p>
+    <p class="match-player-stats">
+      <span>击杀 <b>{{ member.kills }}</b></span>
+      <span>阵亡 <b>{{ member.deaths }}</b></span>
+      <span>占点 <b>{{ member.caps }}</b></span>
+    </p>
+  </div>
+  {% set net = member.net | default('暂无') %}
+  <div class="match-trade">
+    <p>净交换</p>
+    <strong{% if net[:1] == '+' %} class="match-gain"{% endif %}>{{ net }}</strong>
+    <p>摧毁 <b>{{ member.destruction }}</b></p>
+    <p>损失 <b>{{ member.losses }}</b></p>
+  </div>
+  {{ match_score(member, '本局评分') }}
+</section>
+{% endif %}
 <section class="match-overview">
   <div class="prediction">
-    <h2>赛前预测</h2>
+    <h2 class="section-heading">赛前预测</h2>
     {% if view.prediction %}
     <div class="prediction-values"><b>A 队 {{ view.prediction.a }}%</b><b>B 队 {{ view.prediction.b }}%</b></div>
     <div class="prediction-bar" aria-hidden="true"><i style="width:{{ view.prediction.width }}%"></i></div>
@@ -20,7 +62,7 @@
   <div class="team-summaries">
     {% for team in view.formal_teams %}
     <section class="team-summary side-{{ team.side }}">
-      <div class="summary-heading"><h2>{{ team.name }}<span class="team-size">{{ team.players | length }} 人</span></h2>{{ outcome(team.outcome) }}</div>
+      <div class="summary-heading"><h3>{{ team.name }}<span class="team-size">{{ team.players | length }} 人</span></h3>{{ outcome(team.outcome) }}</div>
       <dl class="summary-metrics">{% for metric in team.summary %}<div><dt>{{ metric.label }}</dt><dd>{{ metric.display }}</dd>{% if metric.note %}<small class="metric-note">{{ metric.note }}</small>{% endif %}</div>{% endfor %}</dl>
     </section>
     {% endfor %}
@@ -28,34 +70,61 @@
   {% endif %}
 </section>
 <div class="match-columns">
-  <section><h2 class="section-heading">兵种构成</h2><p class="metric-note">按基础出动价值估算</p>
-    {% if view.composition_rows %}{{ comparison(view.composition_rows, true) }}
+  <section>
+    <div class="match-section-title"><h2 class="section-heading">兵种构成</h2><p class="metric-note">按基础出动价值估算</p></div>
+    {% if view.composition_rows %}{{ comparison(view.composition_rows, winner_side, true) }}
     {% else %}<p class="scope">暂无完整兵种构成</p>{% endif %}
     {% for team in view.formal_teams %}{% if team.composition_note %}<p class="metric-note">{{ team.name }}：{{ team.composition_note }}</p>{% endif %}{% endfor %}
   </section>
   <section><h2 class="section-heading">双方对比</h2>
-    {% if view.comparisons %}{{ comparison(view.comparisons) }}{% else %}<p class="scope">暂无对比数据</p>{% endif %}
+    {% if view.comparisons %}{{ comparison(view.comparisons, winner_side) }}{% else %}<p class="scope">暂无对比数据</p>{% endif %}
   </section>
 </div>
+<section aria-labelledby="match-highlights-heading">
+  <h2 class="section-heading" id="match-highlights-heading">本局亮点</h2>
+  {% if view.highlights %}
+  <dl class="match-highlights">
+    {% for highlight in view.highlights %}
+    <div>
+      <dt>{{ highlight.label }}</dt>
+      <dd><strong>{{ highlight.value }}</strong><span>{{ highlight.names if highlight.names is string else highlight.names | join('、') }}</span></dd>
+    </div>
+    {% endfor %}
+  </dl>
+  {% else %}<p class="metric-note">暂无本局亮点</p>{% endif %}
+</section>
+{% if member %}
+<section aria-labelledby="personal-highlights-heading">
+  <div class="match-section-title">
+    <h2 class="section-heading" id="personal-highlights-heading">个人亮点</h2>
+    {% if member %}<span>{{ member.name }}</span>{% elif view.player.id != '暂无' %}<span>{{ view.player.name }}</span>{% endif %}
+  </div>
+  {% if honors %}
+  <ul class="personal-highlights">
+    {% for item in honors %}<li>{{ honor(item) }}{% if item.reason %}<span>{{ item.reason }}</span>{% endif %}</li>{% endfor %}
+  </ul>
+  {% else %}<p class="metric-note">暂无个人亮点</p>{% endif %}
+</section>
+{% endif %}
 <h2 class="section-heading" id="roster-heading">队伍玩家</h2>
 {% if view.teams %}
 <table class="roster" aria-labelledby="roster-heading">
-  <thead><tr><th scope="col">玩家</th><th scope="col">ELO</th><th scope="col">分值 K/D</th><th scope="col" class="roster-wide">摧毁 / 损失</th><th scope="col" class="roster-wide">击杀 / 阵亡</th></tr></thead>
+  <thead><tr><th scope="col">玩家</th><th scope="col">评分</th><th scope="col">净交换</th><th scope="col">击杀 / 阵亡</th><th scope="col">占点</th></tr></thead>
   {% for team in view.teams %}
   <tbody class="team">
     <tr class="team-heading side-{{ team.side }}"><th scope="rowgroup" colspan="5">{{ team.name }}<span class="team-size">{{ team.players | length }} 人</span>{% if team.outcome.key != 'unknown' %}{{ outcome(team.outcome) }}{% endif %}</th></tr>
     {% for player in team.players %}
+    {% set net = player.net | default('暂无') %}
     <tr class="participant{% if player.is_target %} target{% endif %}">
-      <th scope="row">{{ player.name }}{% if player.is_target %}<small class="target-label">查询玩家</small>{% endif %}</th>
-      {% for metric in player.metrics[:4] %}<td{% if loop.index > 2 %} class="roster-wide"{% endif %}>{{ metric.display }}</td>{% endfor %}
+      <th scope="row"><div class="roster-player">
+        <span>{{ player.name }}</span>
+        {% for item in (player.honors | default([]))[:2] %}{{ honor(item) }}{% endfor %}
+      </div></th>
+      <td>{{ match_score(player) }}</td>
+      <td{% if net[:1] == '+' %} class="match-gain"{% endif %}>{{ net }}</td>
+      <td>{{ player.kills }} / {{ player.deaths }}</td>
+      <td>{{ player.caps }}</td>
     </tr>
-    {% if player.is_target %}
-    <tr class="participant-detail target{% if not player.metrics[4:] %} narrow-only{% endif %}">
-      <td colspan="5"><div class="compact-line">
-        {% for metric in player.metrics[2:] %}<span{% if loop.index < 3 %} class="narrow-only"{% endif %}>{{ metric.label }} <b>{{ metric.display }}</b>{% if metric.note %}（{{ metric.note }}）{% endif %}</span>{% endfor %}
-      </div></td>
-    </tr>
-    {% endif %}
     {% else %}<tr><td colspan="5" class="empty">队员：暂无</td></tr>{% endfor %}
   </tbody>
   {% endfor %}

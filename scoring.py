@@ -264,6 +264,34 @@ def recent_score(match: Match, participant: Participant, analysis: Mapping | Non
     return _to10(_percentile(combined, MODEL["matchPct"]["career"]))
 
 
+def match_score(match: Match, participant: Participant) -> float | None:
+    """Use the same fitted scale for every player, with this battle's unit mix."""
+    spend = dict.fromkeys(ROLE_KEYS, 0)
+    for unit in participant.units:
+        entry = MODEL["units"].get(str(unit["id"]))
+        if entry is None:
+            return None
+        role, cost = entry
+        if role in spend:
+            spend[role] += cost * unit.get("count", 1)
+    total = sum(spend.values())
+    roles = {k: v / total for k, v in spend.items()} if total else MODEL["avgRoles"]
+    outcome = None
+    if match.winner_team in ("0", "1"):
+        outcome = "win" if participant.team == match.winner_team else "loss"
+    features = _match_features(match, participant, _career_trade(roles), outcome)
+    if not features:
+        return None
+    combined, _ = _career_performance(features, roles)
+    return _to10(_percentile(combined, MODEL["matchPct"]["career"]))
+
+
+def match_score_band(score: float | None) -> Literal["low", "medium", "high"] | None:
+    if score is None:
+        return None
+    return "high" if score >= 7.5 else "medium" if score >= 5 else "low"
+
+
 def profile_rating(matches: list[Match], player_id: str, analysis: Mapping | None) -> dict:
     """Aggregate up to 20 valid recent rows. Input matches are newest first.
 

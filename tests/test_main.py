@@ -740,6 +740,8 @@ async def test_image_render_uses_card_width_and_fixed_outer_template(app, monkey
     }
     if kind is not None:
         view["kind"] = kind
+    if kind == "match":
+        view["teams"] = [{"name": "A 队", "players": [view["player"]]}]
     first = await plugin._image(view, "onebot:test:group:one")
     assert first.path.suffix == ".jpg"
     assert first.path.read_bytes() == source.read_bytes()

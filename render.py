@@ -261,37 +261,6 @@ class Renderer:
             "note": note,
         }
 
-    def _player_metrics(self, item: Mapping, *, detail=False, damage_source=None) -> list[dict]:
-        """Pair comparable values, preserving zero and unknown independently."""
-        def value(key, style="decimal"):
-            raw = item.get(key)
-            return _plain(raw) if isinstance(raw, str) else _numeric(raw, style, compact=True)
-
-        def pair(first, second, style="decimal"):
-            return f"{value(first, style)} / {value(second, style)}"
-
-        rating = value("elo")
-        delta = value("elo_delta", "signed")
-        metrics = [
-            {"label": "ELO", "value": rating + (f" ({delta})" if delta != MISSING else "")},
-            {"label": "分值 K/D", "value": value("value_exchange")},
-            {"label": "摧毁 / 损失", "value": pair("destroyed_value", "lost_value")},
-            {"label": "击杀 / 阵亡", "value": pair("kills", "losses", "integer")},
-        ]
-        if not detail:
-            return [self._metric(metric) for metric in metrics]
-        if any(item.get(key) is not None for key in ("damage_dealt", "damage_received")):
-            metrics.append({"label": "伤害 / 承伤", "value": pair("damage_dealt", "damage_received")})
-        if item.get("damage_exchange") is not None:
-            metrics.append({"label": "伤害交换比", "value": value("damage_exchange"),
-                            "note": "分析样本" if damage_source == "analysis" else ""})
-        for key, label, style in (("objectives", "占点", "integer"),
-                                  ("spawned_value", "出动价值", "decimal"),
-                                  ("supply", "补给消耗", "decimal")):
-            if item.get(key) is not None:
-                metrics.append({"label": label, "value": value(key, style)})
-        return [self._metric(metric) for metric in metrics]
-
     @staticmethod
     def _profile(value, recent_rows) -> dict:
         rating = _mapping(value)
@@ -428,6 +397,12 @@ class Renderer:
             "winner": _plain(match.get("winner")),
             "target_outcome": _outcome(match.get("target_outcome"), match.get("target_outcome_conflict")),
         }
+        prepared["winner_side"] = dict(zip(_FORMAL_TEAMS, ("a", "b"))).get(prepared["match"]["winner"], "")
+        prepared["target_member"] = None
+        prepared["highlights"] = [
+            {key: _plain(row.get(key)) for key in ("label", "value", "names")}
+            for row in _records(view.get("highlights"))[:3]
+        ]
         raw_teams = _records(view.get("teams"))
         side_members = {}
         target_id = prepared["player"]["id"]
@@ -465,11 +440,30 @@ class Renderer:
             composition_complete = (bool(composition) and all(item["number"] is not None for item in composition)
                                     and abs(total - 100) <= Decimal("0.01") and not team.get("composition_note"))
             roster = []
-            for item in members:
+            for item in sorted(members, key=lambda row: (
+                _number(row.get("score")) is None, -(_number(row.get("score")) or 0)
+            )):
                 is_target = target_id != MISSING and _plain(item.get("id")) == target_id
-                roster.append({"name": _plain(item.get("name")), "is_target": is_target,
-                               "metrics": self._player_metrics(
-                                   item, detail=is_target, damage_source=match.get("target_damage_exchange_source"))})
+                score = _number(item.get("score"))
+                destroyed, lost = (_number(item.get(field)) for field in ("destroyed_value", "lost_value"))
+                member = {
+                    "name": _plain(item.get("name")), "is_target": is_target,
+                    "score": format(score, ".1f") if score is not None else MISSING,
+                    "score_band": item.get("score_band") if item.get("score_band") in ("low", "medium", "high") else "",
+                    "net": _numeric(destroyed - lost if destroyed is not None and lost is not None else None,
+                                    "signed", compact=True),
+                    "honors": [{"name": _plain(h["name"]), "positive": h.get("positive") is True,
+                                "reason": _plain(h.get("reason"), "")}
+                               for h in _records(item.get("honors")) if h.get("name")][:2],
+                }
+                for field, raw, style in (("elo", "elo", "decimal"), ("elo_delta", "elo_delta", "signed"),
+                                          ("kills", "kills", "integer"), ("deaths", "losses", "integer"),
+                                          ("caps", "objectives", "integer"), ("destruction", "destroyed_value", "decimal"),
+                                          ("losses", "lost_value", "decimal")):
+                    member[field] = _numeric(item.get(raw), style, compact=True)
+                roster.append(member)
+                if is_target:
+                    prepared["target_member"] = member
             prepared["teams"].append({
                 "name": _plain(team.get("name")),
                 "side": side,
@@ -485,6 +479,8 @@ class Renderer:
         sides = [team_by_side.get(side, {}) for side in ("a", "b")]
         prepared["formal_teams"] = [team for team in sides if team]
         prepared["teams"] = prepared["formal_teams"] + [team for team in prepared["teams"] if team["side"] == "neutral"]
+        if prepared["winner_side"]:
+            prepared["teams"].sort(key=lambda team: team["side"] != prepared["winner_side"])
         a_members, b_members = (side_members.get(side, []) for side in ("a", "b"))
         comparable_rosters = match.get("roster_complete") is not False and len(a_members) == len(b_members)
         prediction = _mapping(view.get("prediction"))
@@ -501,6 +497,9 @@ class Renderer:
         prepared["prediction_note"] = "按赛前 ELO 估算" if prepared["prediction"] else "暂无可用预测"
 
         labels = dict.fromkeys(label for team in sides for label in team.get("metrics", {}))
+        # ELO is shown in the team header. The scoreboard uses net spend after refunds.
+        labels = [label for label in ("摧毁分", "击杀", "伤害", "出兵净花费", "出兵数量", "补给", "占点", "单位存活率")
+                  if label in labels]
         prepared["comparisons"] = []
         for label in labels:
             pair = [team.get("metrics", {}).get(label, {}) for team in sides]
@@ -607,6 +606,9 @@ class Renderer:
                 meta.append(f"胜方：{match['winner']}")
             if meta:
                 lines.append(" · ".join(meta))
+            target = data["target_member"]
+            if target:
+                lines.append(f"本局评分 {target['score']} · 净交换 {target['net']} · ELO {target['elo']} ({target['elo_delta']})")
             prediction = data["prediction"]
             lines.append(
                 f"赛前预测：A 队 {prediction['a']}% · B 队 {prediction['b']}%（{data['prediction_note']}）"
@@ -629,6 +631,12 @@ class Renderer:
                     v + (f"（{n}）" if n else "") for v, n in zip(row["values"], row["notes"])))
             if not data["comparisons"]:
                 lines.append("暂无对比数据")
+            if data["highlights"]:
+                lines.append("本局亮点")
+                lines.extend(f"{h['label']} · {h['names']} {h['value']}" for h in data["highlights"])
+            if target and target["honors"]:
+                lines.append("个人亮点")
+                lines.extend(f"{h['name']} · {h['reason']}" for h in target["honors"])
             lines.append("队伍玩家")
             for team in data["teams"]:
                 heading = f"{team['name']} · {len(team['players'])} 人"
@@ -636,10 +644,9 @@ class Renderer:
                     heading += " · " + team['outcome']['label']
                 lines.extend(["", heading])
                 for player in team["players"]:
-                    name = player["name"] + ("（查询玩家）" if player["is_target"] else "")
-                    lines.append(name + " · " + metrics(player["metrics"][:4]))
-                    if player["metrics"][4:]:
-                        lines.append(metrics(player["metrics"][4:]))
+                    name = " · ".join([player["name"], *(h["name"] for h in player["honors"])])
+                    lines.append(f"{name} · 评分 {player['score']} · 净交换 {player['net']} · "
+                                 f"击杀 / 阵亡 {player['kills']} / {player['deaths']} · 占点 {player['caps']}")
                 if not team["players"]:
                     lines.append("队员：暂无")
             if not data["teams"]:

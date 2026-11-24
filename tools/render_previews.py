@@ -86,6 +86,7 @@ def sample_views() -> dict[str, dict]:
         match={"id": "sample-match-001", "map_name": "合成港区", "mode": "ranked",
                "started_at": "2026-11-17T02:20:00Z", "duration_seconds": 2700, "winner": "A 队", "target_outcome": "win"},
         prediction={"a": 50, "b": 50},
+        highlights=[{"label": "占点最多", "names": match["player"]["name"], "value": "6 次"}],
         teams=[
             {"id": str(side), "name": name, "outcome": "win" if side == 0 else "loss",
              "metrics": [{"label": label, "value": values[side], "format": "decimal" if label == "赛后平均 ELO" else "integer"}
@@ -101,8 +102,11 @@ def sample_views() -> dict[str, dict]:
                 {"id": base["player"]["id"] if side == 0 and index == 1 else f"sample-{side}-{index}",
                  "name": match["player"]["name"] if side == 0 and index == 1 else f"合成队员 {side + 1}-{index + 1}",
                  "elo_before": 1800 + index * 12.5,
+                 "score": 8.2 - index, "score_band": ("high", "medium", "medium", "medium", "low")[index],
+                 "honors": [{"name": "侦察尖刀", "reason": "侦察击杀 9 个", "positive": True},
+                            {"name": "抢点先锋", "reason": "占点 6 次", "positive": True}] if index == 1 and side == 0 else [],
                  "elo": 1800 + index * 12.5 + (8.25 if side == 0 else -8.25), "elo_delta": 8.25 if side == 0 else -8.25,
-                 "damage_dealt": 1253, "damage_received": 964, "objectives": 3,
+                 "damage_dealt": 1253, "damage_received": 964, "objectives": 6 if side == 0 and index == 1 else 3,
                  "spawned_value": 7570, "supply": 6926,
                  "kills": 36, "losses": 24, "unit_exchange": 1.5,
                  "destroyed_value": 9750.5, "lost_value": 6520.25, "value_exchange": 9750.5 / 6520.25}
@@ -241,9 +245,9 @@ async def screenshots(artifacts: list[dict]) -> list[dict]:
                             const rosterColumns = [...(roster?.querySelectorAll('thead th') ?? [])]
                                 .filter(el => el.getClientRects().length).map(el => el.textContent.trim());
                             const badRoster = roster && (roster.tHead.rows.length !== 1 ||
-                                rosterColumns.length !== (innerWidth <= 680 ? 3 : 5) ||
-                                roster.querySelectorAll('.participant-detail').length !==
-                                roster.querySelectorAll('.participant.target').length);
+                                rosterColumns.length !== 5 ||
+                                [...roster.querySelectorAll('.roster-player')].some(cell =>
+                                    cell.querySelectorAll('.match-honor').length > 2 || cell.scrollWidth > cell.clientWidth + 1));
                             return {
                                 width: innerWidth, documentWidth: document.documentElement.scrollWidth,
                                 height: document.documentElement.scrollHeight,
