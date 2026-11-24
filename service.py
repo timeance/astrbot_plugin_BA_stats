@@ -10,6 +10,7 @@ import time
 
 from .client import participant_for
 from .commands import Request, Target
+from .map_names import display_map_name
 from .match_honors import match_honors
 from .models import FetchResult, Match, Participant, Player, analysis_outcomes, win_rate_sample
 from .pending import PendingManager
@@ -75,11 +76,13 @@ def outcome_view(result):
 
 
 def map_name(match, player=None):
+    name = match.map_name
     if player is not None and match.map_id is not None:
         for row in player.analysis.get("mapPerformance", []):
             if row["mapId"] == match.map_id and row["mapName"]:
-                return row["mapName"]
-    return match.map_name
+                name = row["mapName"]
+                break
+    return display_map_name(match.map_id, name)
 
 
 def recent_rows(matches, player_id, player=None, *, with_scores=True):
@@ -466,7 +469,7 @@ STB ID：{binding.player_id}
             view["profile_rating"] = profile_rating(matches, player.id, player.analysis)
             view["metrics"] = overview_metrics(player, rows)
             view["common_units"] = common_units(player, matches)
-            view["map_stats"] = [{"name": m["mapName"] or f"地图#{m['mapId']}",
+            view["map_stats"] = [{"name": display_map_name(m["mapId"], m["mapName"]),
                                   "count": m["matchCount"], "win_rate": m["winRate"]}
                                  for m in player.analysis.get("mapPerformance", [])[:5]]
             analysis_count = player.analysis.get("matchCount")

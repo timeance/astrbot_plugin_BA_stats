@@ -29,6 +29,7 @@ OUTPUT = SESSION / "tmp" / "report-readability" / "previews"
 sys.path.insert(0, str(REPOSITORY))
 
 from render import Renderer
+from map_names import display_map_name
 
 PHONE_WIDTH = 390
 
@@ -63,27 +64,27 @@ def sample_views() -> dict[str, dict]:
         style_scope="近83场风格", categories=[{"name": name, "percentage": value} for name, value in
                                              (("支援", 31.4), ("固定翼", 30.7), ("步兵", 10.7), ("车辆", 10.1),
                                               ("侦察", 9.6), ("直升机", 7.5))],
-        map_stats=[{"name": "合成港区", "count": 8, "win_rate": 50},
-                   {"name": "合成山区", "count": 6, "win_rate": 100 / 3}],
+        map_stats=[{"name": display_map_name("28"), "count": 8, "win_rate": 50},
+                   {"name": display_map_name("9"), "count": 6, "win_rate": 100 / 3}],
     )
     recent = deepcopy(base)
     recent.update(kind="recent", rows=[
         {
             "score": [8.6, 7.1, 2.3, 5.8, None][index], "score_band": "high" if index == 0 else "low" if index == 2 else "medium",
-            "id": f"sample-match-{index + 1:03d}", "map_name": f"合成地图 {index + 1}",
+            "id": f"sample-match-{index + 1:03d}", "map_name": display_map_name(map_id),
             "mode": "custom" if index == 4 else "ranked", "outcome": "loss" if index == 2 else "win",
             "started_at": f"2026-11-{17 - index:02d}T02:20:00Z", "duration_seconds": 1327 + index * 53,
             "elo_delta": -12.5 if index == 2 else 8.25, "kills": 36 + index, "losses": 24,
             "unit_exchange": 1.5 + index / 24, "destroyed_value": 9750.5 + index * 100,
             "lost_value": 6520.25, "value_exchange": (9750.5 + index * 100) / 6520.25,
         }
-        for index in range(5)
+        for index, map_id in enumerate(("11", "28", "4", "9", "14"))
     ])
     match = deepcopy(base)
     match["player"]["name"] += " · 合成样本"
     match.update(
         kind="match", scope="单场记录 · 排位 · 5 对 5 人",
-        match={"id": "sample-match-001", "map_name": "合成港区", "mode": "ranked",
+        match={"id": "sample-match-001", "map_name": display_map_name("11"), "mode": "ranked",
                "started_at": "2026-11-17T02:20:00Z", "duration_seconds": 2700, "winner": "A 队", "target_outcome": "win"},
         prediction={"a": 50, "b": 50},
         highlights=[{"label": "占点最多", "names": match["player"]["name"], "value": "6 次"}],

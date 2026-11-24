@@ -75,7 +75,7 @@ SteamID64 与 STB ID 均保持字符串；**未找到可靠的 Steam→STB 映�
 - `Type` 枚举未得到可靠释义，故 `mode='unknown'`。缺评分或评分不变不能证明是自定义局；参考工具的“未计分”筛选也不能替代源模式。
 - `Destruction/Losses` 对应单位数量，`DestructionScore/LossesScore` 对应摧毁/损失价值；两者不可混算。只在已识别的 protobuf 参与者 shape 中，对这四个省略字段和 `TeamId` 应用参考源码明确记载的零默认值；四个计数显式 null 保持未知，`TeamId` 显式 null 报结构错误。其他来源与 dataclass 默认不填零。
 - `DamageDealt/DamageReceived` 为造成/承受伤害，`ObjectivesCaptured` 为占点数，`TotalSpawnedUnitScore` 为出动价值，`SupplyPointsConsumed` 为补给消耗；这些可选核心字段缺失时保持未知，不填零。
-- 名字缺失为空字符串；地图表未核实，已有 `MapId` 显示 `地图#<ID>`。不下载单位表或游戏资产。
+- 战报地图使用《断箭》游戏内简体中文名。`map_names.py` 的名称来自游戏本地化表（Steam build `26627577`），地图编号按 BATrace 对局的 `MapId` 与同场游戏加载的场景核对。例如 `28` 为 Coal Mountain（煤山），`27` 为 Daugavpils（陶格夫匹尔斯），`25` 为 Kadaga Military Base（卡达加军事基地）。未收录的地图保留来源名称，只有编号时显示 `地图#<ID>`。
 - `UnitData` 每条记录保留 ID、名称、`count=1`，以及模型需要的出动/死亡时间、退款与击杀数。`count` 仍是**出场记录数**，飞机重复出动可能多条，不是独立单位数或实际花费。`units_available` 区分缺失的 `UnitData` 与明确提供的空对象；兵种构成的基础花费估算另行标注。
 - `complete` 是保守的**本地缓存完整度标记**：单局详情有结束时间、参与者且每人显式含 `UnitData` 对象才为真；不代表源端声明“数据最终完成”。列表始终为 false。结束不足五分钟的详情仍仅缓存 60 秒。
 - 最近对局按稳定 ID 去重、按实际结束时间（缺少时用实际开始时间）降序，两者都缺少才放最后；相同 ID 优先保留参与者更多的记录。返回实际样本数，不冒称完整历史或完整排位样本。

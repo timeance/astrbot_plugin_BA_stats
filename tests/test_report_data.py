@@ -51,7 +51,7 @@ def report(monkeypatch):
                 sys.modules.pop(key, None)
 
 
-def recent(report, mid, *, destroyed=100, lost=25, map_id=20, at=NOW):
+def recent(report, mid, *, destroyed=100, lost=25, map_id=120, at=NOW):
     return report.m.Match(mid, map_name=f"地图#{map_id}", map_id=str(map_id), started_at=at,
                           players=[report.m.Participant("001", "Synthetic", team="0", elo_delta=10,
                                                         destroyed_value=destroyed, lost_value=lost),
@@ -130,7 +130,7 @@ async def test_overview_units_maps_and_categories_use_analysis_and_preserve_same
         ],
         "categoryPreferences": [{"categoryKey": "support", "percentage": 0},
                                 {"categoryKey": "infantry", "percentage": 75}],
-        "mapPerformance": [{"mapId": 20 + i, "mapName": f"Map {i}", "matchCount": i,
+        "mapPerformance": [{"mapId": 120 + i, "mapName": f"Map {i}", "matchCount": i,
                             "winRate": 0 if i == 0 else 50} for i in range(6)],
     })
     match = recent(report, "x")
@@ -158,12 +158,26 @@ async def test_analysis_empty_lists_remain_empty_without_inventing_statistics(re
     assert "单局伤害交换比" not in metrics(view)
     assert "近期伤害交换比" not in metrics(view)
     assert view["style_scope"] == "近0场风格"
-    assert view["rows"][0]["map_name"] == "地图#20"
+    assert view["rows"][0]["map_name"] == "地图#120"
+
+
+@pytest.mark.parametrize(("map_id", "upstream", "expected"), [
+    (28, "#28", "煤山"), (25, "Coal Mountain", "卡达加军事基地"),
+    (120, "Snow Castle", "纳尔瓦冰雪城堡"), (121, "#121", "地图#121"),
+])
+async def test_game_map_names_across_reports(report, map_id, upstream, expected):
+    player = report.player({"matchCount": 1, "mapPerformance": [{"mapId": map_id, "mapName": upstream}]})
+    match = recent(report, "match", map_id=map_id)
+    view = await report.run(player, [match])
+    assert view["map_stats"][0]["name"] == view["rows"][0]["map_name"] == expected
+    assert report.s.match_view(report.result(match), player)["match"]["map_name"] == expected
+    if map_id in (28, 25):
+        assert report.s.match_view(report.result(match))["match"]["map_name"] == expected
 
 
 def test_match_target_result_and_map_do_not_imply_team_or_opponent_results(report):
     player = report.player({"trend": {"points": [{"matchId": "42", "won": False}]},
-                            "mapPerformance": [{"mapId": 20, "mapName": "Known map"}]})
+                            "mapPerformance": [{"mapId": 120, "mapName": "Known map"}]})
     match = recent(report, "42")
     match.players.append(report.m.Participant("002", "Ally", team="0", elo_delta=10))
     before = deepcopy(match)
