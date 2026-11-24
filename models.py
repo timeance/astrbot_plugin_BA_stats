@@ -56,6 +56,12 @@ class Participant:
     elo_before: float | None = None
     # An empty supplied UnitData is different from a missing UnitData.
     units_available: bool = False
+    refunded_value: float | None = None
+    supply_destroyed: float | None = None
+    supply_consumed_by_allies: float | None = None
+    supply_captured: float | None = None
+    supply_airdropped: float | None = None
+    supply_captured_by_enemy: float | None = None
 
 
 @dataclass
@@ -370,6 +376,9 @@ def parse_match(payload: Any, requested_id: str, *, detail: bool = True) -> Matc
             refunded = unit.get("WasRefunded", False)
             if not isinstance(refunded, bool):
                 raise ValueError("expected a boolean WasRefunded")
+            airdropped = unit.get("WasAirdropped")
+            if airdropped is not None and not isinstance(airdropped, bool):
+                raise ValueError("expected a boolean WasAirdropped")
             normalized_units.append({
                 "id": canonical_id(unit.get("Id")),
                 "name": _name(unit.get("Name")) or None,
@@ -378,6 +387,9 @@ def parse_match(payload: Any, requested_id: str, *, detail: bool = True) -> Matc
                 "death_time": _nonnegative(unit.get("DeathTime", 0)),
                 "was_refunded": refunded,
                 "killed_count": _number(unit.get("KilledCount", 0), count=True),
+                **({"was_airdropped": airdropped} if "WasAirdropped" in unit else {}),
+                **({"building_destroyed_count": _number(unit["BuildingDestroyedCount"], count=True)}
+                   if "BuildingDestroyedCount" in unit else {}),
             })
         players.append(Participant(
             player_id=pid, name=_name(row.get("Name")), team=str(team),
@@ -392,6 +404,12 @@ def parse_match(payload: Any, requested_id: str, *, detail: bool = True) -> Matc
             spawned_value=_nonnegative(row.get("TotalSpawnedUnitScore")),
             supply=_nonnegative(row.get("SupplyPointsConsumed")),
             elo_before=old, units_available="UnitData" in row,
+            refunded_value=_nonnegative(row.get("TotalRefundedUnitScore")),
+            supply_destroyed=_nonnegative(row.get("SupplyDestroyed")),
+            supply_consumed_by_allies=_nonnegative(row.get("SupplyPointsConsumedByAllies")),
+            supply_captured=_nonnegative(row.get("SupplyCaptured")),
+            supply_airdropped=_nonnegative(row.get("SupplyAirdropped")),
+            supply_captured_by_enemy=_nonnegative(row.get("SupplyCapturedByEnemy")),
         ))
     duration = _number(info.get("TotalPlayTimeInSec"))
     if duration is not None and duration < 0:
@@ -400,8 +418,15 @@ def parse_match(payload: Any, requested_id: str, *, detail: bool = True) -> Matc
     end = utc_datetime(info.get("EndTime"))
     if end is not None and start is not None and end < start:
         raise ValueError("match ends before it starts")
-    # The reference infers victory from rating changes. This is not an
-    # authoritative outcome field: retain unknown even for consistent deltas.
+    # On timed point victories BATrace sometimes omits the default Alpha enum.
+    # Require the recorded final points in that case, never the ELO change.
+    winner = info.get("WinnerTeam")
+    winner_team = str(winner) if type(winner) is int and winner in (0, 1) else None
+    points = info.get("TeamMatchPoints")
+    if ("WinnerTeam" not in info and end is not None and info.get("EndMatchReason") == 2
+            and isinstance(points, dict) and all(type(points.get(k)) is int for k in ("Alpha", "Bravo"))
+            and points["Alpha"] > points["Bravo"] >= 0):
+        winner_team = "0"
     # Type enum meanings are not documented by the reference; zero ELO change
     # alone cannot distinguish custom, incomplete and unrated matches.
     complete = detail and bool(players) and end is not None and all(
@@ -410,7 +435,7 @@ def parse_match(payload: Any, requested_id: str, *, detail: bool = True) -> Matc
     map_id = canonical_id(info["MapId"]) if "MapId" in info else None
     return Match(
         id=requested_id, map_name=(f"地图#{map_id}" if map_id is not None else None),
-        map_id=map_id,
+        map_id=map_id, winner_team=winner_team,
         started_at=start, duration_seconds=duration, ended_at=end,
         players=players, complete=complete,
         source_url=SOURCE_URL + "match/" + quote(requested_id, safe=""),

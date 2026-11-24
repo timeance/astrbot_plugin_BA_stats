@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
-  <title>断箭战报 · {{ view.title }}</title>
+  <title>断箭战报 · {% block title %}{{ view.title }}{% endblock %}</title>
   <style>
     :root {
       color-scheme: dark;
@@ -61,27 +61,6 @@
     .outcome.loss { color: var(--loss); }
     .outcome.conflict { color: var(--warning); }
     .row-meta { display: flex; flex-wrap: wrap; gap: 5px 18px; color: var(--muted); font-size: 14px; margin-top: 7px; overflow-wrap: anywhere; }
-    .team-size { color: var(--muted); font-size: 14px; margin-left: 8px; font-weight: 400; }
-    .roster { width: 100%; table-layout: fixed; border-collapse: collapse; }
-    .roster :is(th, td) { padding: 8px 10px; text-align: right; overflow-wrap: anywhere; }
-    .roster :is(th, td):first-child { text-align: left; }
-    .roster thead { color: var(--muted); font-size: 17px; border-bottom: 1px solid var(--line); }
-    .roster thead th:first-child { width: 29%; }
-    .roster thead th:nth-child(2) { width: 20%; }
-    .roster thead th:nth-child(3) { width: 12%; }
-    .roster thead th:nth-child(4) { width: 24%; }
-    .roster .team-heading { background: var(--subtle); border-top: 2px solid var(--side); font-size: 19px; }
-    .team-heading .outcome { margin-left: 10px; }
-    .roster .participant { background: var(--panel); border-top: 1px solid var(--line); font-size: 21px; }
-    .roster .participant-detail { background: var(--panel); color: var(--muted); font-size: 17px; }
-    .roster .participant-detail td { padding-top: 0; }
-    .roster .target { background: var(--team-a-panel); }
-    .roster .side-b ~ .target { background: var(--team-b-panel); }
-    .roster .target > :first-child { box-shadow: inset 3px 0 var(--accent); }
-    .target-label { display: inline-block; color: var(--accent); font-size: 15px; margin-inline-start: 8px; }
-    .compact-line { display: flex; flex-wrap: wrap; gap: 2px 14px; }
-    .compact-line b { color: var(--ink); font-weight: 600; }
-    .roster .narrow-only { display: none; }
     .report-table { width: 100%; border-collapse: collapse; table-layout: auto; }
     .report-table th, .report-table td { padding: 9px 5px; text-align: right; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
     .report-table th { color: var(--muted); font-size: 13px; font-weight: 400; }
@@ -142,53 +121,161 @@
     .score { display: inline-flex; flex-direction: column; font-size: 25px; font-weight: 700; line-height: 1.1; flex-shrink: 0; }
     .score small { font-size: 11px; color: var(--muted); font-weight: 400; margin-bottom: 4px; }
     .score.low { color: var(--loss); } .score.medium { color: var(--ink); } .score.high { color: var(--warning); }
-    .prediction { border: 1px solid var(--line); padding: 18px; background: var(--panel); }
-    .prediction-values { display: flex; justify-content: space-between; gap: 10px; margin: 12px 0; color: var(--team-a); font-size: 24px; }
-    .prediction-values b:last-child { color: var(--team-b); }
-    .prediction-bar { height: 9px; background: var(--team-b); } .prediction-bar i { display: block; height: 100%; background: var(--team-a); }
-    .side-a { --side: var(--team-a); color: var(--team-a); }
-    .side-b { --side: var(--team-b); color: var(--team-b); }
-    .side-neutral { --side: var(--muted); }
-    .team-summaries { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--line); border-top: 0; }
-    .team-summary { min-width: 0; padding: 14px 18px 16px; border-top: 3px solid var(--side); background: var(--panel); }
-    .team-summary.side-a { background: var(--team-a-panel); }
-    .team-summary.side-b { background: var(--team-b-panel); }
-    .team-summary + .team-summary { border-left: 1px solid var(--line); }
-    .summary-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-    .summary-heading h2 { min-width: 0; overflow-wrap: anywhere; }
-    .summary-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; margin: 12px 0 0; color: var(--ink); }
-    .summary-metrics div { min-width: 0; }
-    .summary-metrics dt { color: var(--muted); font-size: 12px; }
-    .summary-metrics dd { margin: 2px 0 0; font-size: 21px; font-weight: 650; overflow-wrap: anywhere; }
-    .match-columns { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 20px; }
-    .match-columns > section { min-width: 0; }
-    .comparison-key, .comparison-values, .comparison-notes { display: flex; justify-content: space-between; gap: 12px; }
-    .comparison-key { margin: 0 0 16px; }
-    .comparison-key > span { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
-    .comparison-key > span:last-child { text-align: right; }
-    .comparison-list { margin: 0; }
-    .comparison-row { margin: 0 0 13px; }
-    .comparison-row dt { font-size: 13px; color: var(--muted); }
-    .comparison-row dd { margin: 2px 0 0; }
-    .comparison-values b { font-size: 16px; font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
-    .comparison-values b:last-child { text-align: right; }
-    .comparison-track { display: flex; height: 9px; margin-top: 5px; background: var(--subtle); }
-    .comparison-track .segment { display: block; height: 100%; background: var(--side); }
-    .comparison-notes { color: var(--muted); font-size: 12px; margin-top: 3px; }
-    .comparison-notes > :last-child { text-align: right; }
-    .composition-key { margin: 7px 0 16px; }
-    .composition-row { margin-bottom: 16px; }
-    .composition-row .comparison-track { height: 14px; }
-    .role-armor { --role: #8f9460; --role-light: #bec1a2; }
-    .role-infantry { --role: #6f9a79; --role-light: #adc7b3; }
-    .role-recon { --role: #4fa3a0; --role-light: #9dcfcd; }
-    .role-artillery { --role: #b07a4a; --role-light: #d3b394; }
-    .role-air-defense { --role: #8c7bb8; --role-light: #beb4d7; }
-    .role-helicopter { --role: #c08bb0; --role-light: #dbbdd1; }
-    .role-aircraft { --role: #9aa3ad; --role-light: #c4c9cf; }
-    .role-logistics, .role-other { --role: #898f97; --role-light: #bdc1c6; }
-    .comparison-track .role-a { background: var(--role); }
-    .comparison-track .role-b { background: var(--role-light); }
+    .match-body {
+      --canvas: #172024; --panel: #1c282c; --subtle: #23312d;
+      --ink: #f2f5f0; --muted: #b2c1c0; --line: #38494c;
+      --accent: #84d9bb; --win: #a4e4c5; --loss: #f1ac98;
+      --team-a: #a1cdf1; --team-b: #f1ac98;
+      --team-a-panel: #26333e; --team-b-panel: #382d2b;
+      --a-mid: #739fbc; --a-deep: #507f9d; --a-light: #bdd9eb;
+      --b-mid: #ca9386; --b-deep: #aa6350; --b-light: #efd2c7;
+      --target: #203e35; --victory: #264938; --victory-ink: #bde9c9;
+      --score-high: #4d3c22; --score-high-ink: #ffdc86;
+      --score-medium: #39362e; --score-medium-ink: #edddbb;
+      --score-low: #303b41; --score-low-ink: #c5d0d4;
+      --honor-line: #8b999e; --honor-ink: #c6d0d3;
+      --honor-gold: #cda754; --honor-gold-ink: #f5d687;
+    }
+    [data-theme="light"] .match-body {
+      --canvas: #f4f4ee; --panel: #fffefa; --subtle: #e7ede7;
+      --ink: #192e37; --muted: #50646a; --line: #d2d9d5;
+      --accent: #106451; --win: #106451; --loss: #a74735;
+      --team-a: #27689b; --team-b: #a74735;
+      --team-a-panel: #e5edf2; --team-b-panel: #f2e6df;
+      --a-mid: #4b80a5; --a-deep: #325d7e; --a-light: #bdd9eb;
+      --b-mid: #bd6755; --b-deep: #944837; --b-light: #efd2c7;
+      --target: #e4f1e9; --victory: #ccecd6; --victory-ink: #174b36;
+      --score-high: #f5dfae; --score-high-ink: #78500b;
+      --score-medium: #f0e8d6; --score-medium-ink: #6c5836;
+      --score-low: #e3e6e7; --score-low-ink: #48555d;
+      --honor-line: #859097; --honor-ink: #49565e;
+      --honor-gold: #ae8329; --honor-gold-ink: #78570c;
+    }
+    .report-match { padding: 16px 32px 24px; overflow-wrap: anywhere; }
+    .report-match .brandline { padding-bottom: 9px; margin-bottom: 14px; border-bottom: 1px solid var(--line); font-size: 17px; }
+    .report-match .brand { font-size: 21px; }
+    .report-match .identity { padding: 0; border: 0; margin-bottom: 18px; }
+    .report-match .match-map { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 20px; }
+    .report-match .match-map > div { flex: 1 1 60%; min-width: 0; }
+    .report-match h1 { font-size: 43px; line-height: 1.15; }
+    .report-match .identity-meta { font-size: 17px; }
+    .report-match .match-victory {
+      display: inline-grid; place-items: center; min-height: 48px; padding: 5px 18px;
+      background: var(--victory); color: var(--victory-ink); font-size: 27px; line-height: 1.15; font-weight: 700;
+    }
+    .report-match .section-heading { margin: 22px 0 8px; font-size: 24px; padding-left: 11px; border-left: 4px solid var(--accent); }
+    .report-match .match-hero {
+      display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1.1fr) minmax(0, .9fr);
+      align-items: stretch; gap: 16px; padding: 16px 18px;
+      border-left: 4px solid var(--accent); background: var(--panel);
+    }
+    .report-match .match-player, .report-match .match-trade { align-self: center; min-width: 0; }
+    .report-match .match-player-heading, .report-match .match-player-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+    .report-match .match-player-heading h2 { max-width: 100%; font-size: 34px; line-height: 1.2; }
+    .report-match .match-elo { margin-top: 10px; font-size: 20px; }
+    .report-match .match-elo span { margin-inline-start: 5px; }
+    .report-match .match-player-stats { margin-top: 7px; color: var(--muted); }
+    .report-match .match-player-stats b, .report-match .match-trade b { color: var(--ink); }
+    .report-match .match-trade { border-left: 1px solid var(--line); padding-left: 16px; color: var(--muted); }
+    .report-match .match-trade strong { display: block; color: var(--ink); font-size: 34px; line-height: 1.2; margin: 2px 0 7px; }
+    .report-match .match-hero .match-score {
+      display: flex; flex-direction: column; justify-content: center; gap: 4px;
+      min-height: 132px; padding: 10px; font-size: 20px;
+    }
+    .report-match .match-hero .match-score b { font-size: 50px; line-height: 1.15; }
+    .report-match .match-gain, .report-match .match-trade strong.match-gain { color: var(--win); }
+    .report-match .match-score {
+      display: inline-block; min-width: 2.5em; max-width: 100%; padding: 3px 6px; text-align: center; line-height: 1.25;
+      color: var(--score-low-ink); background: var(--score-low);
+    }
+    .report-match .match-score.medium { color: var(--score-medium-ink); background: var(--score-medium); }
+    .report-match .match-score.high { color: var(--score-high-ink); background: var(--score-high); }
+    .report-match .match-honor {
+      display: inline-block; max-width: 100%; padding: 1px 6px; border: 1px solid var(--honor-line);
+      border-radius: 4px; color: var(--honor-ink); background: var(--panel); font-size: 14px; font-weight: 650;
+    }
+    .report-match .match-honor.positive { color: var(--honor-gold-ink); border-color: var(--honor-gold); }
+    .report-match .prediction-values { display: flex; justify-content: space-between; gap: 10px; margin: 8px 0; color: var(--team-a); font-size: 23px; }
+    .report-match .prediction-values b:last-child { color: var(--team-b); }
+    .report-match .prediction-bar { height: 9px; background: var(--b-mid); }
+    .report-match .prediction-bar i { display: block; height: 100%; background: var(--a-mid); }
+    .report-match .side-a { --side: var(--team-a); --side-panel: var(--team-a-panel); color: var(--side); }
+    .report-match .side-b { --side: var(--team-b); --side-panel: var(--team-b-panel); color: var(--side); }
+    .report-match .side-neutral { --side: var(--muted); --side-panel: var(--subtle); }
+    .report-match .team-summaries { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 10px; }
+    .report-match .team-summary { min-width: 0; padding: 10px 14px; border-top: 2px solid var(--side); background: var(--side-panel); }
+    .report-match .summary-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 10px; }
+    .report-match .summary-heading h3 { font-size: 18px; }
+    .report-match .team-size { color: var(--muted); font-size: 13px; margin-left: 8px; font-weight: 400; }
+    .report-match .summary-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px 14px; margin: 8px 0 0; color: var(--ink); }
+    .report-match .summary-metrics dt { color: var(--muted); font-size: 13px; }
+    .report-match .summary-metrics dd { margin: 0; font-size: 20px; font-weight: 650; }
+    .report-match .match-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+    .report-match .match-columns > section + section { border-left: 1px solid var(--line); padding-left: 16px; }
+    .report-match .match-comparison .comparison-key, .report-match .comparison-notes {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;
+    }
+    .report-match .comparison-key { margin: 6px 0 8px; }
+    .report-match :is(.comparison-key, .comparison-notes) > :last-child { text-align: right; }
+    .report-match .comparison-list { margin: 0; }
+    .report-match .comparison-row {
+      display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) minmax(0, 1fr);
+      align-items: baseline; gap: 4px 6px; margin-bottom: 9px;
+    }
+    .report-match .comparison-row dt { grid-area: 1 / 2; text-align: center; font-size: 15px; }
+    .report-match .comparison-row dd, .report-match .comparison-values { display: contents; }
+    .report-match .comparison-values b:first-child { grid-area: 1 / 1; }
+    .report-match .comparison-values b:last-child { grid-area: 1 / 3; text-align: right; }
+    .report-match .comparison-values b { font-size: 18px; font-weight: 650; }
+    .report-match .composition-row .comparison-values b { color: var(--ink); }
+    .report-match .comparison-track { grid-column: 1 / -1; display: flex; height: 9px; background: var(--subtle); }
+    .report-match .comparison-track .segment { flex: 0 0 auto; height: 100%; }
+    .report-match .comparison-notes { grid-column: 1 / -1; color: var(--muted); }
+    .report-match .composition-row .comparison-track { height: 12px; }
+    .report-match .match-comparison { --a-fill: var(--a-mid); --b-fill: var(--b-mid); }
+    .report-match .winner-a { --a-fill: var(--a-deep); --b-fill: var(--b-light); }
+    .report-match .winner-b { --a-fill: var(--a-light); --b-fill: var(--b-deep); }
+    .report-match .segment.side-a { background: var(--a-fill); }
+    .report-match .segment.side-b { background: var(--b-fill); }
+    .report-match .role-armor { --role-deep: #73793d; --role-light: #dddca9; }
+    .report-match .role-infantry { --role-deep: #3f7952; --role-light: #c9e9cc; }
+    .report-match .role-recon { --role-deep: #257e81; --role-light: #bce6e3; }
+    .report-match .role-artillery { --role-deep: #95603a; --role-light: #f3d8ba; }
+    .report-match .role-air-defense { --role-deep: #795f9c; --role-light: #e2d7f3; }
+    .report-match .role-helicopter { --role-deep: #975b7b; --role-light: #f0d5e2; }
+    .report-match .role-aircraft { --role-deep: #5c7386; --role-light: #dae5ed; }
+    .report-match :is(.role-logistics, .role-other) { --role-deep: #7e6c5b; --role-light: #e7dbcc; }
+    .report-match .comparison-track .segment + .segment { box-shadow: inset 1px 0 var(--canvas); }
+    .report-match :is(.role-a, .role-b) { background: var(--role-deep); }
+    .report-match .winner-a .role-b, .report-match .winner-b .role-a { background: var(--role-light); }
+    .report-match .match-highlights {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; background: var(--subtle);
+    }
+    .report-match .match-highlights > div { padding: 10px 14px; }
+    .report-match .match-highlights > div + div { border-left: 1px solid var(--line); }
+    .report-match .match-highlights dt, .report-match .match-section-title > span { color: var(--muted); }
+    .report-match .match-highlights dd { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px; margin: 3px 0 0; }
+    .report-match .match-highlights strong { font-size: 25px; }
+    .report-match .match-section-title { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; column-gap: 10px; }
+    .report-match .personal-highlights { padding: 2px 14px; margin: 0; list-style: none; background: var(--panel); }
+    .report-match .personal-highlights li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 7px 0; }
+    .report-match .personal-highlights li + li { border-top: 1px solid var(--line); }
+    .report-match .roster { width: 100%; table-layout: fixed; border-collapse: collapse; }
+    .report-match .roster :is(th, td) { padding: 6px 10px; text-align: right; }
+    .report-match .roster :is(th, td):first-child { text-align: left; }
+    .report-match .roster thead { color: var(--muted); font-size: 15px; }
+    .report-match .roster thead th:nth-child(1) { width: 36%; }
+    .report-match .roster thead th:nth-child(2) { width: 13%; }
+    .report-match .roster thead th:nth-child(3) { width: 17%; }
+    .report-match .roster thead th:nth-child(4) { width: 22%; }
+    .report-match .roster .team-heading { background: var(--side-panel); box-shadow: inset 4px 0 var(--side); }
+    .report-match .team-heading .outcome { margin-left: 10px; }
+    .report-match .roster .participant { background: var(--panel); border-bottom: 1px solid var(--line); font-size: 18px; }
+    .report-match .roster .participant.target { background: var(--target); }
+    .report-match .participant.target th { box-shadow: inset 4px 0 var(--accent); }
+    .report-match .roster-player { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 7px; }
+    .report-match .roster-player > span { min-width: 0; max-width: 100%; }
+    .report-match .participant:not(.target) .roster-player > :first-child { font-weight: 500; }
     .notes { margin-top: 20px; padding-left: 18px; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
     footer { border-top: 1px solid var(--line); margin-top: 26px; padding-top: 14px; color: var(--muted); font-size: 13px; }
     footer p + p { margin-top: 5px; }
@@ -206,23 +293,22 @@
       .metric { padding: 14px 13px; }
       .metric-number { font-size: 32px; }
       .metric-label, .metric-note, footer { font-size: 14px; }
-      .match-columns { grid-template-columns: 1fr; }
-      .team-summary { padding: 12px 10px; }
-      .summary-heading { flex-wrap: wrap; gap: 4px; }
-      .summary-heading h2 { font-size: 16px; }
-      .summary-heading .team-size { margin-left: 5px; font-size: 12px; }
-      .summary-metrics { grid-template-columns: 1fr; gap: 8px; }
-      .summary-metrics dd { font-size: 20px; }
-      .prediction-values { font-size: 20px; }
-      .roster thead th:first-child { width: 43%; }
-      .roster thead th:nth-child(2) { width: 34%; }
-      .roster thead th:nth-child(3) { width: 23%; }
-      .roster :is(th, td) { padding-inline: 7px; }
-      .roster thead, .roster .participant-detail { font-size: 14px; }
-      .roster .roster-wide { display: none; }
-      .roster tr.narrow-only { display: table-row; }
-      .roster span.narrow-only { display: inline; }
-      .roster .participant { font-size: 16px; }
+      .report-match { padding: 14px 16px 20px; }
+      .report-match h1 { font-size: 34px; }
+      .report-match .section-heading { font-size: 20px; }
+      .report-match .match-hero { gap: 10px; padding: 12px; }
+      .report-match .match-player-heading h2, .report-match .match-trade strong { font-size: 26px; }
+      .report-match .match-hero .match-score { min-height: 98px; font-size: 16px; }
+      .report-match .match-hero .match-score b { font-size: 34px; }
+      .report-match .match-columns { grid-template-columns: minmax(0, 1fr); gap: 0; }
+      .report-match .match-columns > section + section { border: 0; padding: 0; }
+      .report-match .team-summaries { gap: 8px; }
+      .report-match .team-summary { padding: 8px; }
+      .report-match .summary-metrics { gap: 4px 8px; }
+      .report-match .summary-metrics dd { font-size: 16px; }
+      .report-match .roster :is(th, td) { padding-inline: 5px; }
+      .report-match .roster :is(thead, .participant) { font-size: 14px; }
+      .report-match .roster .match-honor { font-size: 12px; }
     }
     @media (max-width: 520px) {
       .report-overview, .report-recent { padding-inline: 14px; }
@@ -230,6 +316,14 @@
       .report-recent .row-heading { gap: 8px; }
       .report-recent .row-heading h3 { font-size: 18px; }
       .report-recent .row-heading .score { font-size: 20px; }
+      .report-match .match-map > div { flex-basis: 100%; }
+      .report-match .match-victory { min-height: 36px; font-size: 21px; padding-inline: 10px; }
+      .report-match .match-hero { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .report-match .match-player { grid-column: 1 / -1; padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+      .report-match .match-trade { padding: 0; border: 0; }
+      .report-match .match-highlights { grid-template-columns: minmax(0, 1fr); }
+      .report-match .match-highlights > div + div { border-left: 0; border-top: 1px solid var(--line); }
+      .report-match .roster .match-score { min-width: 0; padding-inline: 4px; }
     }
     @media (min-width: 600px) {
       .report-overview { font-size: 21px; line-height: 1.4; }
@@ -256,7 +350,7 @@
     }
   </style>
 </head>
-<body>
+<body{% if view.kind == 'match' %} class="match-body"{% endif %}>
 <main class="report report-{{ view.kind }}">
   <div class="brandline"><span class="brand">断箭战报</span><span>{{ view.title }}</span></div>
   {% if view.synthetic %}<p class="synthetic">合成样本 · 非真实玩家战绩</p>{% endif %}

@@ -10,9 +10,10 @@ import time
 
 from .client import participant_for
 from .commands import Request, Target
+from .match_honors import match_honors
 from .models import FetchResult, Match, Participant, Player, analysis_outcomes, win_rate_sample
 from .pending import PendingManager
-from .scoring import match_prediction, profile_rating, recent_score, score_band, team_composition
+from .scoring import match_prediction, match_score, match_score_band, profile_rating, recent_score, score_band, team_composition
 from .storage import Binding
 
 
@@ -158,6 +159,16 @@ def match_view(result, player=None, *, recent_match=None):
     teams = OrderedDict(sorted(teams.items(), key=lambda pair: {"0": 0, "1": 1}.get(pair[0], 2)))
     for key, team in teams.items():
         team["metrics"] = team_metrics(team["players"])
+        members = [p for p in match.players if p.team == key]
+        if all(p.spawned_value is not None and p.refunded_value is not None
+               and p.spawned_value >= p.refunded_value for p in members):
+            team["metrics"].append({"label": "出兵净花费", "value": sum(p.spawned_value - p.refunded_value for p in members)})
+        if match.complete and all(p.units_available for p in members):
+            units = [unit for p in members for unit in p.units]
+            team["metrics"].append({"label": "出兵数量", "value": len(units), "format": "integer"})
+            if units and all(unit.get("death_time") is not None for unit in units):
+                team["metrics"].append({"label": "单位存活率", "format": "percent", "unit": "%",
+                                        "value": 100 * sum(unit["death_time"] == 0 for unit in units) / len(units)})
         composition = team_composition(match, key)
         team["composition"] = composition["categories"]
         team["composition_coverage"] = composition["coverage"]
@@ -180,13 +191,20 @@ def match_view(result, player=None, *, recent_match=None):
             coverage_labels.append(f"{label} {matched}/{len(known)}")
     # The recent roster can prove a gap but cannot prove completeness.
     roster_incomplete = any(c["matched"] < c["known"] for c in coverage.values())
+    prediction = None if roster_incomplete else match_prediction(match)
+    honors, highlights = ({}, []) if roster_incomplete else match_honors(match, winner_team)
+    participants = {p.player_id: p for p in match.players}
+    for team in teams.values():
+        for row in team["players"]:
+            score = match_score(match, participants[row["id"]]) if match.complete and prediction else None
+            row.update(score=score, score_band=match_score_band(score), honors=honors.get(row["id"], []))
     view = {"kind": "match", "match": {
         "id": match.id, "map_name": map_name(match, player), "mode": match.mode,
         "started_at": match.started_at, "ended_at": match.ended_at, "duration_seconds": match.duration_seconds,
         "winner": {"0": "A 队", "1": "B 队"}.get(winner_team),
         "target_damage_exchange": target_damage, "target_damage_exchange_source": target_damage_source,
         **{f"target_{key}": value for key, value in target_result.items()},
-    }, "teams": list(teams.values()), "prediction": None if roster_incomplete else match_prediction(match),
+    }, "teams": list(teams.values()), "prediction": prediction, "highlights": highlights,
         "comparison_team_ids": ["0", "1"] if "0" in teams and "1" in teams else [],
         "scope": f"单局 · 实际收录 {len(match.players)} 名玩家",
         "source_url": match.source_url, **freshness(result)}

@@ -1,7 +1,20 @@
 {% macro outcome(value) %}<span class="outcome {{ value.key }}">{{ value.label }}</span>{% endmacro %}
 
-{% macro comparison(rows, composition=false) %}
-<p class="metric-note comparison-key"><span class="side-a">左 A 队{% if composition %}（深）{% endif %}</span><span class="side-b">右 B 队{% if composition %}（浅）{% endif %}</span></p>
+{% macro honor(item) %}<span class="match-honor{% if item.positive %} positive{% endif %}">{{ item.name }}</span>{% endmacro %}
+
+{% macro match_score(member, label='') %}
+<span class="match-score{% if member.score_band in ('high', 'medium', 'low') %} {{ member.score_band }}{% endif %}">
+  {% if label %}<span>{{ label }}</span>{% endif %}<b>{{ member.score | default('暂无', true) }}</b>
+</span>
+{% endmacro %}
+
+{% macro comparison(rows, winner_side, composition=false) %}
+{% set decided = winner_side in ('a', 'b') %}
+<div class="match-comparison{% if decided %} winner-{{ winner_side }}{% endif %}">
+<p class="metric-note comparison-key">
+  <span class="side-a">左 A 队{% if decided %}（{{ '深' if winner_side == 'a' else '浅' }}）{% endif %}</span>
+  <span class="side-b">右 B 队{% if decided %}（{{ '深' if winner_side == 'b' else '浅' }}）{% endif %}</span>
+</p>
 <dl class="comparison-list">
   {% for row in rows %}
   <div class="comparison-row{% if composition %} composition-row{% endif %}"><dt>{{ row.label }}</dt><dd>
@@ -16,4 +29,5 @@
   </dd></div>
   {% endfor %}
 </dl>
+</div>
 {% endmacro %}
