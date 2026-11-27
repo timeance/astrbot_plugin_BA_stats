@@ -28,7 +28,7 @@ from .storage import Storage
 from .web_settings import SettingsError, WebSettings
 
 
-PLUGIN_VERSION = "0.1.8"
+PLUGIN_VERSION = "0.1.9"
 
 
 def extract_arguments(event, prefixes):

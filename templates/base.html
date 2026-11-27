@@ -212,11 +212,11 @@
     .report-match .summary-metrics dd { margin: 0; font-size: 20px; font-weight: 650; }
     .report-match .match-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
     .report-match .match-columns > section + section { border-left: 1px solid var(--line); padding-left: 16px; }
-    .report-match .match-comparison .comparison-key, .report-match .comparison-notes {
+    .report-match .comparison-key {
       display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;
+      margin: 6px 0 8px;
     }
-    .report-match .comparison-key { margin: 6px 0 8px; }
-    .report-match :is(.comparison-key, .comparison-notes) > :last-child { text-align: right; }
+    .report-match .comparison-key > :last-child { text-align: right; }
     .report-match .comparison-list { margin: 0; }
     .report-match .comparison-row {
       display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) minmax(0, 1fr);
@@ -229,8 +229,8 @@
     .report-match .comparison-values b { font-size: 18px; font-weight: 650; }
     .report-match .composition-row .comparison-values b { color: var(--ink); }
     .report-match .comparison-track { grid-column: 1 / -1; display: flex; height: 9px; background: var(--subtle); }
+    .report-match .empty-track { background: var(--line); }
     .report-match .comparison-track .segment { flex: 0 0 auto; height: 100%; }
-    .report-match .comparison-notes { grid-column: 1 / -1; color: var(--muted); }
     .report-match .composition-row .comparison-track { height: 12px; }
     .report-match .match-comparison { --a-fill: var(--a-mid); --b-fill: var(--b-mid); }
     .report-match .winner-a { --a-fill: var(--a-deep); --b-fill: var(--b-light); }

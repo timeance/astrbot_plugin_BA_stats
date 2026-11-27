@@ -24,8 +24,9 @@
       <i class="segment {% if composition %}role-{{ row.role }} role-a{% else %}side-a{% endif %}" style="width:{{ row.width }}%"></i>
       <i class="segment {% if composition %}role-{{ row.role }} role-b{% else %}side-b{% endif %}" style="width:{{ 100 - row.width }}%"></i>
     </div>
+    {% elif not composition %}
+    <div class="comparison-track empty-track" aria-hidden="true"></div>
     {% endif %}
-    {% if row.notes and (row.notes[0] or row.notes[1]) %}<div class="comparison-notes"><small>{{ row.notes[0] }}</small><small>{{ row.notes[1] }}</small></div>{% endif %}
   </dd></div>
   {% endfor %}
 </dl>

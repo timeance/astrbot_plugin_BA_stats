@@ -77,7 +77,7 @@
     {% for team in view.formal_teams %}{% if team.composition_note %}<p class="metric-note">{{ team.name }}：{{ team.composition_note }}</p>{% endif %}{% endfor %}
   </section>
   <section><h2 class="section-heading">双方对比</h2>
-    {% if view.comparisons %}{{ comparison(view.comparisons, winner_side) }}{% else %}<p class="scope">暂无对比数据</p>{% endif %}
+    {{ comparison(view.comparisons, winner_side) }}
   </section>
 </div>
 <section aria-labelledby="match-highlights-heading">

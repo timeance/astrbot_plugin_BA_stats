@@ -525,7 +525,7 @@ async def test_last_checks_the_known_roster_on_each_side(h, case):
             team_id: {"matched": 1, "known": 2} for team_id in ("0", "1")
         }
         assert view["prediction"] is None
-        assert 'class="comparison-track"' not in html and 'class="prediction-bar"' not in html
+        assert 'class="segment side-a"' in html and 'class="prediction-bar"' not in html
         for output in (html, text):
             assert "同场已知名单覆盖：A 1/2、B 1/2" in output
             assert "暂无可用预测" in output
@@ -702,8 +702,7 @@ def test_team_comparisons_use_only_both_playing_teams_and_expose_partial_coverag
     assert view["comparison_team_ids"] == ["0", "1"]
     a, b_metric = [next(metric for metric in team["metrics"] if metric["key"] == "damage_dealt")
                    for team in view["teams"][:2]]
-    assert (a["value"], a["observed_count"], a["participant_count"], a["complete"], a["note"]) == (
-        0, 1, 2, False, "1/2 人有数据")
+    assert (a["value"], a["observed_count"], a["participant_count"], a["complete"]) == (0, 1, 2, False)
     assert (b_metric["value"], b_metric["complete"]) == (400, True)
     assert view["teams"][2]["outcome"] == "unknown"
     match.players.remove(b)
