@@ -415,7 +415,6 @@ class Renderer:
             team_metrics = {
                 _plain(item.get("label")): {
                     **self._metric(item), "number": _number(item.get("value")),
-                    "complete": item.get("complete", not item.get("note")) is True,
                 }
                 for item in _records(team.get("metrics"))
             }
@@ -496,18 +495,13 @@ class Renderer:
             prepared["prediction"] = {"a": rounded, "b": 100 - rounded, "width": float(a)}
         prepared["prediction_note"] = "按赛前 ELO 估算" if prepared["prediction"] else "暂无可用预测"
 
-        labels = dict.fromkeys(label for team in sides for label in team.get("metrics", {}))
         # ELO is shown in the team header. The scoreboard uses net spend after refunds.
-        labels = [label for label in ("摧毁分", "击杀", "伤害", "出兵净花费", "出兵数量", "补给", "占点", "单位存活率")
-                  if label in labels]
         prepared["comparisons"] = []
-        for label in labels:
+        for label in ("摧毁分", "击杀", "伤害", "出兵净花费", "出兵数量", "补给", "占点", "单位存活率"):
             pair = [team.get("metrics", {}).get(label, {}) for team in sides]
-            width = (_split_width([m.get("number") for m in pair])
-                     if comparable_rosters and all(m.get("complete") for m in pair) else None)
             prepared["comparisons"].append({
                 "label": label, "values": [m.get("display", MISSING) for m in pair],
-                "notes": [m.get("note", "") for m in pair], "width": width,
+                "width": _split_width([m.get("number") for m in pair]),
             })
         category_names = list(dict.fromkeys(category["name"] for team in sides
                                              for category in team.get("composition", [])))
@@ -626,10 +620,10 @@ class Renderer:
                 if team['composition_note']:
                     lines.append(f"{team['name']}：{team['composition_note']}")
             lines.append("双方对比（A 队 / B 队）")
-            for row in data["comparisons"]:
-                lines.append(f"{row['label']}：" + " / ".join(
-                    v + (f"（{n}）" if n else "") for v, n in zip(row["values"], row["notes"])))
-            if not data["comparisons"]:
+            known_rows = [row for row in data["comparisons"] if any(v != MISSING for v in row["values"])]
+            for row in known_rows:
+                lines.append(f"{row['label']}：" + " / ".join(row["values"]))
+            if not known_rows:
                 lines.append("暂无对比数据")
             if data["highlights"]:
                 lines.append("本局亮点")

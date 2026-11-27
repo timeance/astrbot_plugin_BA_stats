@@ -215,8 +215,8 @@ def test_match_team_metrics_sum_known_values_show_coverage_and_leave_missing_out
         "摧毁分": 350, "损失分": 100, "赛后平均 ELO": 1100, "击杀": 5, "阵亡": 1, "伤害": 500,
         "出动价值": 1000, "占点": 0, "补给": 10,
     }
-    assert first["伤害"]["note"] == "1/2 人有数据"
-    assert first["出动价值"]["note"] == first["占点"]["note"] == first["补给"]["note"] == "1/2 人有数据"
+    for label in ("伤害", "出动价值", "占点", "补给"):
+        assert (first[label]["observed_count"], first[label]["participant_count"]) == (1, 2)
     assert view["teams"][1]["metrics"] == []
     a, b = view["teams"][0]["players"]
     assert a["damage_exchange"] == "无承伤"

@@ -125,8 +125,6 @@ def team_metrics(players):
         metric = {"key": field, "label": label, "value": value, "format": style,
                   "observed_count": len(values), "participant_count": len(players),
                   "complete": complete}
-        if not complete:
-            metric["note"] = f"{len(values)}/{len(players)} 人有数据"
         metrics.append(metric)
     return metrics
 

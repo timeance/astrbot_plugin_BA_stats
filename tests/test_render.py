@@ -431,7 +431,7 @@ def test_renderer_defaults_to_light():
 @pytest.mark.parametrize("values,expected", [
     ((3, 1), 75), ((0, 3), 0), ((3, 0), 100),
     ((1.005, 1.004), 1.005 / 2.009 * 100),
-    ((0, 0), None), ((None, 3), None), ((3, None), None),
+    ((0, 0), None), ((None, 3), None), ((3, None), None), ((None, None), None),
 ])
 def test_comparison_uses_one_continuous_bar_and_raw_denominator(view, values, expected):
     view.update(kind="match", teams=[
@@ -443,29 +443,34 @@ def test_comparison_uses_one_continuous_bar_and_raw_denominator(view, values, ex
     tags = VisibleHTML(html).tags
     tracks = [attrs for tag, attrs in tags if "comparison-track" in attrs.get("class", "").split()]
     segments = [attrs for tag, attrs in tags if "segment" in attrs.get("class", "").split()]
+    assert len(tracks) == 8
     if expected is None:
-        assert not tracks and not segments
+        assert all("empty-track" in track["class"] for track in tracks) and not segments
     else:
-        assert len(tracks) == 1
+        assert len([track for track in tracks if "empty-track" not in track["class"]]) == 1
         widths = [float(attrs["style"].removeprefix("width:").removesuffix("%")) for attrs in segments]
         assert widths == pytest.approx([expected, 100 - expected])
         assert [attrs["class"] for attrs in segments] == ["segment side-a", "segment side-b"]
-    if None in values:
+    if values == (None, None):
+        assert "暂无对比数据" in renderer.text(view)
+    elif None in values:
         assert f"伤害：{' / '.join('暂无' if value is None else str(value) for value in values)}" in renderer.text(view)
     elif values == (0, 0):
         assert "伤害：0 / 0" in renderer.text(view)
 
 
-def test_partial_team_metric_keeps_values_and_coverage_but_has_no_bar(view):
+def test_partial_team_metric_uses_recorded_values_without_coverage_caption(view):
     view.update(kind="match", teams=[
-        {"id": "1", "name": "B 队", "metrics": [{"label": "伤害", "value": 40, "complete": True}]},
-        {"id": "0", "name": "A 队", "metrics": [{"label": "伤害", "value": 0, "complete": False, "note": "1/2 人有数据"}]},
+        {"id": "1", "name": "B 队", "metrics": [{"label": "伤害", "value": 5949, "complete": True}]},
+        {"id": "0", "name": "A 队", "metrics": [{"label": "伤害", "value": 4875, "complete": False, "note": "4/5 人有数据"}]},
     ])
     renderer = Renderer()
     parsed = VisibleHTML(renderer.template(view))
-    assert not any(attrs.get("class") == "comparison-track" for _, attrs in parsed.tags)
-    assert "1/2 人有数据" in parsed.text
-    assert "伤害：0（1/2 人有数据） / 40" in renderer.text(view)
+    width = next(attrs["style"] for _, attrs in parsed.tags if attrs.get("class") == "segment side-a")
+    assert float(width.removeprefix("width:").removesuffix("%")) == pytest.approx(100 * 4875 / (4875 + 5949))
+    assert "人有数据" not in parsed.text
+    text = renderer.text(view)
+    assert "伤害：4875 / 5949" in text and "人有数据" not in text
 
 
 @pytest.mark.parametrize("b_size,b_rating,roster_complete", [(0, 1700, None), (1, 1700, None), (2, None, None), (2, 1700, False)])
